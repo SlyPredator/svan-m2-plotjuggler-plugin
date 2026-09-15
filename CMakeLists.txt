@@ -81,6 +81,26 @@ if(BUILD_TESTING)
   target_link_libraries(m2_dds_loopback_test PRIVATE
     m2_message_flatten)
   add_test(NAME m2_dds_loopback_test COMMAND m2_dds_loopback_test)
+
+  find_library(MCAP_LIB mcap PATHS /opt/ros/jazzy/lib)
+  if(MCAP_LIB)
+    add_executable(m2_bag_player
+      tools/m2_bag_player.cpp)
+    target_link_libraries(m2_bag_player PRIVATE
+      m2_message_flatten
+      ${MCAP_LIB})
+    target_include_directories(m2_bag_player PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_executable(m2_bag_player_smoke
+      tests/m2_bag_player_smoke.cpp)
+    target_link_libraries(m2_bag_player_smoke PRIVATE
+      m2_message_flatten
+      ${MCAP_LIB})
+    target_include_directories(m2_bag_player_smoke PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME m2_bag_player_smoke COMMAND m2_bag_player_smoke)
+  endif()
 endif()
 
 # -----------------------------------------------------------------------------
