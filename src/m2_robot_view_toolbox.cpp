@@ -16,6 +16,7 @@
 #include <QOpenGLFunctions_2_0>
 #include <QOpenGLWidget>
 #include <QPainter>
+#include <QPushButton>
 #include <QSlider>
 #include <QTimer>
 #include <QToolButton>
@@ -258,10 +259,10 @@ struct LinkModel
 
 } // namespace
 
-class M2RobotViewWidget : public QOpenGLWidget, protected QOpenGLFunctions_2_0
+class M2RobotViewCanvas : public QOpenGLWidget, protected QOpenGLFunctions_2_0
 {
 public:
-  explicit M2RobotViewWidget(QWidget* parent = nullptr)
+  explicit M2RobotViewCanvas(QWidget* parent = nullptr)
     : QOpenGLWidget(parent)
   {
     setFocusPolicy(Qt::StrongFocus);
@@ -273,22 +274,45 @@ public:
     plot_data_ = plot_data;
   }
 
+  void setUseImu(bool val)
+  {
+    use_imu_ = val;
+    update();
+  }
+
+  bool useImu() const { return use_imu_; }
+  bool hasOrientation() const { return has_orientation_; }
+  double rollDeg() const { return roll_deg_; }
+  double pitchDeg() const { return pitch_deg_; }
+  double yawDeg() const { return yaw_deg_; }
+
+  void resetCamera()
+  {
+    yaw_ = 0.6;
+    pitch_ = 0.4;
+    camera_dist_ = 1.4;
+    camera_target_ = {0.0, 0.0, 0.0};
+    update();
+  }
+
   void updatePoseFromPlotData()
   {
     if (!plot_data_) return;
 
-    // Read current time and joint positions
-    // Check various common topic names
+    // 1. Read joint angles
     std::array<double, 12> q_vals = {};
     bool has_q = false;
 
     for (int i = 0; i < 12; ++i)
     {
       const QString idx = QString("%1").arg(i, 2, 10, QLatin1Char('0'));
+      const QString single_idx = QString::number(i);
       const QStringList candidates = {
-        QString("sensor_data/joint/%1/q").arg(idx),
-        QString("/m2_metal/hw/sensor_data/joint/%1/q").arg(idx),
         QString("rt/m2_metal/hw/sensor_data/joint/%1/q").arg(idx),
+        QString("/m2_metal/hw/sensor_data/joint/%1/q").arg(idx),
+        QString("sensor_data/joint/%1/q").arg(idx),
+        QString("/m2_metal/hw/sensor_data/q.%1").arg(single_idx),
+        QString("/m2_metal/hw/sensor_data/q.[%1]").arg(single_idx),
         QString("sensor_data/q/%1").arg(idx),
         QString("joints*/q/%1").arg(idx)
       };
@@ -298,7 +322,6 @@ public:
         auto it = plot_data_->numeric.find(curve_name.toStdString());
         if (it != plot_data_->numeric.end() && it->second.size() > 0)
         {
-          // Get the latest value
           q_vals[i] = it->second.back().y;
           has_q = true;
           break;
@@ -309,6 +332,123 @@ public:
     if (has_q)
     {
       current_q_ = q_vals;
+    }
+
+    // 2. Read IMU orientation quaternion (or RPY fallback)
+    bool found_quat = false;
+    double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
+
+    const QStringList quat_prefixes = {
+      "rt/m2_metal/hw/sensor_data/imu/quat",
+      "/m2_metal/hw/sensor_data/imu/quat",
+      "sensor_data/imu/quat"
+    };
+
+    for (const auto& prefix : quat_prefixes)
+    {
+      auto it_x = plot_data_->numeric.find((prefix + "/x").toStdString());
+      auto it_y = plot_data_->numeric.find((prefix + "/y").toStdString());
+      auto it_z = plot_data_->numeric.find((prefix + "/z").toStdString());
+      auto it_w = plot_data_->numeric.find((prefix + "/w").toStdString());
+
+      if (it_x != plot_data_->numeric.end() && it_x->second.size() > 0 &&
+          it_y != plot_data_->numeric.end() && it_y->second.size() > 0 &&
+          it_z != plot_data_->numeric.end() && it_z->second.size() > 0 &&
+          it_w != plot_data_->numeric.end() && it_w->second.size() > 0)
+      {
+        qx = it_x->second.back().y;
+        qy = it_y->second.back().y;
+        qz = it_z->second.back().y;
+        qw = it_w->second.back().y;
+        found_quat = true;
+        break;
+      }
+    }
+
+    if (!found_quat)
+    {
+      for (const auto& base : {"rt/m2_metal/hw/sensor_data", "/m2_metal/hw/sensor_data", "sensor_data"})
+      {
+        auto it_0 = plot_data_->numeric.find(std::string(base) + "/quat.[0]");
+        auto it_1 = plot_data_->numeric.find(std::string(base) + "/quat.[1]");
+        auto it_2 = plot_data_->numeric.find(std::string(base) + "/quat.[2]");
+        auto it_3 = plot_data_->numeric.find(std::string(base) + "/quat.[3]");
+
+        if (it_0 != plot_data_->numeric.end() && it_0->second.size() > 0 &&
+            it_1 != plot_data_->numeric.end() && it_1->second.size() > 0 &&
+            it_2 != plot_data_->numeric.end() && it_2->second.size() > 0 &&
+            it_3 != plot_data_->numeric.end() && it_3->second.size() > 0)
+        {
+          qx = it_0->second.back().y;
+          qy = it_1->second.back().y;
+          qz = it_2->second.back().y;
+          qw = it_3->second.back().y;
+          found_quat = true;
+          break;
+        }
+      }
+    }
+
+    bool found_rpy = false;
+    double roll = 0.0, pitch = 0.0, yaw = 0.0;
+    if (!found_quat)
+    {
+      const QStringList rpy_prefixes = {
+        "rt/m2_metal/hw/sensor_data/imu/rpy",
+        "/m2_metal/hw/sensor_data/imu/rpy",
+        "sensor_data/imu/rpy"
+      };
+
+      for (const auto& prefix : rpy_prefixes)
+      {
+        auto it_r = plot_data_->numeric.find((prefix + "/roll").toStdString());
+        auto it_p = plot_data_->numeric.find((prefix + "/pitch").toStdString());
+        auto it_y = plot_data_->numeric.find((prefix + "/yaw").toStdString());
+
+        if (it_r != plot_data_->numeric.end() && it_r->second.size() > 0 &&
+            it_p != plot_data_->numeric.end() && it_p->second.size() > 0 &&
+            it_y != plot_data_->numeric.end() && it_y->second.size() > 0)
+        {
+          roll = it_r->second.back().y;
+          pitch = it_p->second.back().y;
+          yaw = it_y->second.back().y;
+          found_rpy = true;
+          break;
+        }
+      }
+    }
+
+    if (found_quat)
+    {
+      const double norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+      if (norm > 1e-6)
+      {
+        qx /= norm; qy /= norm; qz /= norm; qw /= norm;
+        has_orientation_ = true;
+        current_root_tf_ = Mat4::fromQuat(qx, qy, qz, qw);
+
+        const double sinr_cosp = 2.0 * (qw * qx + qy * qz);
+        const double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
+        const double sinp = std::clamp(2.0 * (qw * qy - qz * qx), -1.0, 1.0);
+        const double siny_cosp = 2.0 * (qw * qz + qx * qy);
+        const double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+
+        roll_deg_ = std::atan2(sinr_cosp, cosr_cosp) * 180.0 / kPi;
+        pitch_deg_ = std::asin(sinp) * 180.0 / kPi;
+        yaw_deg_ = std::atan2(siny_cosp, cosy_cosp) * 180.0 / kPi;
+      }
+    }
+    else if (found_rpy)
+    {
+      has_orientation_ = true;
+      current_root_tf_ = Mat4::fromRpy(roll, pitch, yaw);
+      roll_deg_ = roll * 180.0 / kPi;
+      pitch_deg_ = pitch * 180.0 / kPi;
+      yaw_deg_ = yaw * 180.0 / kPi;
+    }
+
+    if (has_q || has_orientation_)
+    {
       update();
     }
   }
@@ -393,6 +533,14 @@ protected:
 private:
   PJ::PlotDataMapRef* plot_data_ = nullptr;
   std::array<double, 12> current_q_ = {};
+
+  bool use_imu_ = true;
+  bool has_orientation_ = false;
+  Mat4 current_root_tf_ = Mat4::identity();
+  double roll_deg_ = 0.0;
+  double pitch_deg_ = 0.0;
+  double yaw_deg_ = 0.0;
+
   QHash<QString, LinkModel> links_;
   QVector<JointModel> joints_;
   QHash<QString, QVector<int>> children_by_parent_;
@@ -457,9 +605,15 @@ private:
   void renderRobotModel()
   {
     QHash<QString, Mat4> link_transforms;
-    link_transforms.insert(root_link_, Mat4::identity());
+    Mat4 root_tf = Mat4::identity();
+    if (use_imu_ && has_orientation_)
+    {
+      root_tf = current_root_tf_;
+    }
 
-    applyFkRecursive(root_link_, Mat4::identity(), &link_transforms);
+    link_transforms.insert(root_link_, root_tf);
+
+    applyFkRecursive(root_link_, root_tf, &link_transforms);
 
     for (auto it = link_transforms.begin(); it != link_transforms.end(); ++it)
     {
@@ -635,6 +789,84 @@ private:
       joints_.push_back(joint);
     }
   }
+};
+
+class M2RobotViewWidget : public QWidget
+{
+public:
+  explicit M2RobotViewWidget(QWidget* parent = nullptr)
+    : QWidget(parent)
+  {
+    auto* main_layout = new QVBoxLayout(this);
+    main_layout->setContentsMargins(6, 6, 6, 6);
+    main_layout->setSpacing(4);
+
+    auto* toolbar = new QHBoxLayout();
+    toolbar->setSpacing(10);
+
+    imu_chk_ = new QCheckBox(tr("Torso IMU Orientation"), this);
+    imu_chk_->setChecked(true);
+    imu_chk_->setToolTip(tr("Rotate 3D robot body according to onboard IMU orientation"));
+    toolbar->addWidget(imu_chk_);
+
+    reset_btn_ = new QPushButton(tr("Reset Camera"), this);
+    reset_btn_->setFixedWidth(100);
+    toolbar->addWidget(reset_btn_);
+
+    status_label_ = new QLabel(tr("IMU: Searching..."), this);
+    status_label_->setStyleSheet("color: #8899a6;");
+    toolbar->addWidget(status_label_);
+
+    toolbar->addStretch(1);
+    main_layout->addLayout(toolbar);
+
+    canvas_ = new M2RobotViewCanvas(this);
+    main_layout->addWidget(canvas_, 1);
+
+    connect(imu_chk_, &QCheckBox::toggled, canvas_, [this](bool checked) {
+      canvas_->setUseImu(checked);
+    });
+
+    connect(reset_btn_, &QPushButton::clicked, canvas_, [this]() {
+      canvas_->resetCamera();
+    });
+  }
+
+  void setPlotDataMap(PJ::PlotDataMapRef* plot_data)
+  {
+    if (canvas_) canvas_->setPlotDataMap(plot_data);
+  }
+
+  void updatePoseFromPlotData()
+  {
+    if (!canvas_) return;
+    canvas_->updatePoseFromPlotData();
+
+    if (!canvas_->useImu())
+    {
+      status_label_->setText(tr("IMU: Disabled"));
+      status_label_->setStyleSheet("color: #e5a50a;");
+    }
+    else if (canvas_->hasOrientation())
+    {
+      status_label_->setText(tr("IMU: Roll %1° | Pitch %2° | Yaw %3°")
+                                 .arg(canvas_->rollDeg(), 5, 'f', 1)
+                                 .arg(canvas_->pitchDeg(), 5, 'f', 1)
+                                 .arg(canvas_->yawDeg(), 5, 'f', 1));
+      status_label_->setStyleSheet("color: #4cd964; font-weight: bold;");
+    }
+    else
+    {
+      status_label_->setText(tr("IMU: Inactive (waiting for data)"));
+      status_label_->setStyleSheet("color: #8899a6;");
+    }
+  }
+
+private:
+  M2RobotViewCanvas* canvas_ = nullptr;
+  QCheckBox* imu_chk_ = nullptr;
+  QPushButton* reset_btn_ = nullptr;
+  QLabel* status_label_ = nullptr;
 };
 
 M2RobotViewToolbox::M2RobotViewToolbox() = default;
