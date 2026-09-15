@@ -17,6 +17,7 @@
 #include <QOpenGLWidget>
 #include <QPainter>
 #include <QPushButton>
+#include <QShortcut>
 #include <QSlider>
 #include <QTimer>
 #include <QToolButton>
@@ -818,7 +819,33 @@ public:
     toolbar->addWidget(status_label_);
 
     toolbar->addStretch(1);
+
+    close_btn_ = new QPushButton(tr("✕ Close View"), this);
+    close_btn_->setToolTip(tr("Close 3D View and return to Plots (Esc)"));
+    close_btn_->setCursor(Qt::PointingHandCursor);
+    close_btn_->setStyleSheet(
+      "QPushButton { "
+      "  background-color: #3b2020; "
+      "  color: #ff8080; "
+      "  border: 1px solid #772b2b; "
+      "  border-radius: 4px; "
+      "  padding: 4px 12px; "
+      "  font-weight: bold; "
+      "} "
+      "QPushButton:hover { "
+      "  background-color: #5b2828; "
+      "  color: #ffffff; "
+      "  border-color: #aa3b3b; "
+      "} "
+      "QPushButton:pressed { "
+      "  background-color: #772b2b; "
+      "}");
+    toolbar->addWidget(close_btn_);
+
     main_layout->addLayout(toolbar);
+
+    auto* esc_shortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    connect(esc_shortcut, &QShortcut::activated, close_btn_, &QPushButton::click);
 
     canvas_ = new M2RobotViewCanvas(this);
     main_layout->addWidget(canvas_, 1);
@@ -831,6 +858,8 @@ public:
       canvas_->resetCamera();
     });
   }
+
+  QPushButton* closeButton() const { return close_btn_; }
 
   void setPlotDataMap(PJ::PlotDataMapRef* plot_data)
   {
@@ -866,6 +895,7 @@ private:
   M2RobotViewCanvas* canvas_ = nullptr;
   QCheckBox* imu_chk_ = nullptr;
   QPushButton* reset_btn_ = nullptr;
+  QPushButton* close_btn_ = nullptr;
   QLabel* status_label_ = nullptr;
 };
 
@@ -877,6 +907,9 @@ void M2RobotViewToolbox::init(PJ::PlotDataMapRef& src_data, PJ::TransformsMap& /
   if (!widget_)
   {
     widget_ = new M2RobotViewWidget();
+    connect(widget_->closeButton(), &QPushButton::clicked, this, [this]() {
+      Q_EMIT closed();
+    });
   }
   widget_->setPlotDataMap(&src_data);
 
