@@ -8,8 +8,13 @@ bundle_dir="${repo_root}/bundle/plotjuggler_m2"
 pj_bin="${repo_root}/.deps/plotjuggler/lib/plotjuggler/plotjuggler"
 
 if [[ ! -f "${pj_bin}" ]]; then
-  echo "PlotJuggler binary not found at ${pj_bin}"
-  exit 1
+  if command -v plotjuggler >/dev/null 2>&1; then
+    pj_bin="$(command -v plotjuggler)"
+  else
+    echo "PlotJuggler binary not found at ${pj_bin}"
+    echo "Run ./scripts/build_local_bundle.sh to build PlotJuggler and plugins automatically."
+    exit 1
+  fi
 fi
 
 export LD_LIBRARY_PATH="${repo_root}/.deps/plotjuggler/lib:${repo_root}/.deps/plotjuggler/usr/lib/x86_64-linux-gnu:${repo_root}/third_party/m2_sdk/third_party/install/lib:${LD_LIBRARY_PATH:-}"
@@ -22,6 +27,7 @@ export AMENT_PREFIX_PATH="${repo_root}/.deps/plotjuggler:${AMENT_PREFIX_PATH:-}"
 echo "=================================================="
 echo " Starting PlotJuggler with Svan M2 Plugin Suite"
 echo " Plugin directory: ${bundle_dir}"
+echo " Binary:           ${pj_bin}"
 echo "=================================================="
 
 "${pj_bin}" --plugin_folders "${bundle_dir}" "$@"
