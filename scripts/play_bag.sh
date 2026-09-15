@@ -15,7 +15,7 @@ fi
 
 player_bin="${repo_root}/build/m2_bag_player"
 if [[ -x "${player_bin}" ]]; then
-  export LD_LIBRARY_PATH="${repo_root}/third_party/m2_sdk/third_party/install/lib:${repo_root}/build:/opt/ros/jazzy/lib:${LD_LIBRARY_PATH:-}"
+  export LD_LIBRARY_PATH="${repo_root}/.deps/plotjuggler/lib:${repo_root}/third_party/m2_sdk/third_party/install/lib:${repo_root}/build:${LD_LIBRARY_PATH:-}"
   exec "${player_bin}" "${BAG_PATH}" --rate "${RATE}" "$@"
 fi
 

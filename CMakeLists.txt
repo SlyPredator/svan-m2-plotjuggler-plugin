@@ -82,7 +82,7 @@ if(BUILD_TESTING)
     m2_message_flatten)
   add_test(NAME m2_dds_loopback_test COMMAND m2_dds_loopback_test)
 
-  find_library(MCAP_LIB mcap PATHS /opt/ros/jazzy/lib)
+  find_library(MCAP_LIB mcap PATHS "${CMAKE_CURRENT_SOURCE_DIR}/.deps/plotjuggler/lib" /opt/ros/jazzy/lib)
   if(MCAP_LIB)
     add_executable(m2_bag_player
       tools/m2_bag_player.cpp)
