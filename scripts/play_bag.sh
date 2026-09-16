@@ -28,8 +28,10 @@ echo "=================================================="
 # Source ROS 2 and M2 message overlay (temporarily disable nounset for ROS scripts)
 set +u
 source /opt/ros/jazzy/setup.bash
-if [[ -f "/home/robotics/m2_ws/install/setup.bash" ]]; then
-  source /home/robotics/m2_ws/install/setup.bash
+if [[ -n "${M2_WS:-}" && -f "${M2_WS}/install/setup.bash" ]]; then
+  source "${M2_WS}/install/setup.bash"
+elif [[ -f "${repo_root}/../m2_ws/install/setup.bash" ]]; then
+  source "${repo_root}/../m2_ws/install/setup.bash"
 fi
 set -u
 

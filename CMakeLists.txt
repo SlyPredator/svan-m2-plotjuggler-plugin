@@ -82,7 +82,24 @@ if(BUILD_TESTING)
     m2_message_flatten)
   add_test(NAME m2_dds_loopback_test COMMAND m2_dds_loopback_test)
 
-  find_library(MCAP_LIB mcap PATHS "${CMAKE_CURRENT_SOURCE_DIR}/.deps/plotjuggler/lib" /opt/ros/jazzy/lib)
+  # --- Standalone Bundled MCAP Compilation ---
+  find_package(zstd QUIET)
+  find_library(ZSTD_LIB NAMES zstd libzstd)
+  find_library(LZ4_LIB NAMES lz4 liblz4)
+
+  if(ZSTD_LIB AND LZ4_LIB AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mcap/reader.hpp")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/mcap_impl.cpp"
+      "#define MCAP_IMPLEMENTATION\n#include <mcap/reader.hpp>\n#include <mcap/writer.hpp>\n")
+    add_library(bundled_mcap STATIC "${CMAKE_CURRENT_BINARY_DIR}/mcap_impl.cpp")
+    target_include_directories(bundled_mcap PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    target_link_libraries(bundled_mcap PUBLIC ${ZSTD_LIB} ${LZ4_LIB})
+    set(MCAP_LIB bundled_mcap)
+  else()
+    find_library(MCAP_LIB mcap PATHS
+      "${CMAKE_CURRENT_SOURCE_DIR}/.deps/plotjuggler/lib")
+  endif()
+
   if(MCAP_LIB)
     add_executable(m2_bag_player
       tools/m2_bag_player.cpp)
@@ -90,7 +107,8 @@ if(BUILD_TESTING)
       m2_message_flatten
       ${MCAP_LIB})
     target_include_directories(m2_bag_player PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR})
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
     add_executable(m2_bag_player_smoke
       tests/m2_bag_player_smoke.cpp)
@@ -98,7 +116,8 @@ if(BUILD_TESTING)
       m2_message_flatten
       ${MCAP_LIB})
     target_include_directories(m2_bag_player_smoke PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR})
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
     add_test(NAME m2_bag_player_smoke COMMAND m2_bag_player_smoke)
   endif()
 endif()
