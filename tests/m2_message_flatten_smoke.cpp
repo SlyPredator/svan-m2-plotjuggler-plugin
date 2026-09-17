@@ -128,5 +128,67 @@ int main()
   assert(std::abs(captured_samples["joystick/buttons/fixed_stand"] - 1.0) < 1e-5);
 
   std::cout << "SUCCESS: All JoyData tests passed!" << std::endl;
+
+  // 4. Test QuadLog_
+  captured_samples.clear();
+  xterra::msg::dds_::QuadLog_ quad_msg;
+  quad_msg.base_position().x(1.23f);
+  quad_msg.base_position().y(-0.45f);
+  quad_msg.base_position().z(0.67f);
+  quad_msg.contact_force()[0] = 120.0f; // FR x
+  quad_msg.joint_torque()[0] = 15.5f;
+
+  engine.onQuadLog("quad_log", quad_msg, 1.03, sink);
+  assert(captured_samples.count("quad_log/base_pos/x") == 1);
+  assert(std::abs(captured_samples["quad_log/base_pos/x"] - 1.23) < 1e-4);
+  assert(captured_samples.count("quad_log/contact_force/FR/x") == 1);
+  assert(std::abs(captured_samples["quad_log/contact_force/FR/x"] - 120.0) < 1e-4);
+  assert(captured_samples.count("quad_log/joint_torque/00") == 1);
+  assert(std::abs(captured_samples["quad_log/joint_torque/00"] - 15.5) < 1e-4);
+  std::cout << "SUCCESS: All QuadLog tests passed!" << std::endl;
+
+  // 5. Test Point3D_
+  captured_samples.clear();
+  xterra::msg::dds_::Point3D_ pt_msg;
+  pt_msg.x(3.0f);
+  pt_msg.y(4.0f);
+  pt_msg.z(0.0f);
+  engine.onPoint3D("base_err", pt_msg, 1.04, sink);
+  assert(captured_samples.count("base_err/x") == 1);
+  assert(captured_samples.count("base_err/norm") == 1);
+  assert(std::abs(captured_samples["base_err/norm"] - 5.0) < 1e-5);
+  std::cout << "SUCCESS: All Point3D tests passed!" << std::endl;
+
+  // 6. Test SolverStats_
+  captured_samples.clear();
+  xterra::msg::dds_::SolverStats_ stats_msg;
+  stats_msg.iters(12);
+  stats_msg.time_ms(3.45f);
+  engine.onSolverStats("solver_stats", stats_msg, 1.05, sink);
+  assert(captured_samples.count("solver_stats/iters") == 1);
+  assert(std::abs(captured_samples["solver_stats/iters"] - 12.0) < 1e-5);
+  assert(captured_samples.count("solver_stats/time_ms") == 1);
+  assert(std::abs(captured_samples["solver_stats/time_ms"] - 3.45) < 1e-4);
+  std::cout << "SUCCESS: All SolverStats tests passed!" << std::endl;
+
+  // 7. Test FloatScalar_
+  captured_samples.clear();
+  xterra::msg::dds_::FloatScalar_ fs_msg;
+  fs_msg.data(42.0f);
+  engine.onFloatScalar("mpc_time", fs_msg, 1.06, sink);
+  assert(captured_samples.count("mpc_time/data") == 1);
+  assert(std::abs(captured_samples["mpc_time/data"] - 42.0) < 1e-5);
+  std::cout << "SUCCESS: All FloatScalar tests passed!" << std::endl;
+
+  // 8. Test PowerData_
+  captured_samples.clear();
+  xterra::msg::dds_::PowerData_ pwr_msg;
+  pwr_msg.voltage(24.0f);
+  pwr_msg.current(5.0f);
+  engine.onPowerData("power_data", pwr_msg, 1.07, sink);
+  assert(captured_samples.count("power_data/power_calc") == 1);
+  assert(std::abs(captured_samples["power_data/power_calc"] - 120.0) < 1e-4);
+  std::cout << "SUCCESS: All PowerData tests passed!" << std::endl;
+
   return 0;
 }

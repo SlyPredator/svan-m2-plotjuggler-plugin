@@ -126,7 +126,28 @@ void M2DataStreamer::loadDefaultSettings()
     {std::string(kRosJointCommandTopic), "JointData", true},
     {std::string(kDdsJointCommandTopic), "JointData", true},
     {std::string(kRosJoystickTopic), "JoyData", true},
-    {std::string(kDdsJoystickTopic), "JoyData", true}
+    {std::string(kDdsJoystickTopic), "JoyData", true},
+    // QuadLog telemetry
+    {"/m2_metal/hw/wbc_modified", "QuadLog", true},
+    {"rt/m2_metal/hw/wbc_modified", "QuadLog", true},
+    {"/m2_metal/hw/estimated", "QuadLog", true},
+    {"rt/m2_metal/hw/estimated", "QuadLog", true},
+    {"/m2_metal/hw/gt_data", "QuadLog", true},
+    {"rt/m2_metal/hw/gt_data", "QuadLog", true},
+    {"/m2_metal/hw/reference", "QuadLog", true},
+    {"rt/m2_metal/hw/reference", "QuadLog", true},
+    // SolverStats telemetry
+    {"/m2_metal/hw/solver_stats", "SolverStats", true},
+    {"rt/m2_metal/hw/solver_stats", "SolverStats", true},
+    // Point3D error telemetry
+    {"/m2_metal/hw/base_err", "Point3D", true},
+    {"rt/m2_metal/hw/base_err", "Point3D", true},
+    // FloatScalar timing telemetry
+    {"/m2_metal/hw/mpc_time", "FloatScalar", true},
+    {"rt/m2_metal/hw/mpc_time", "FloatScalar", true},
+    // PowerData telemetry
+    {"/m2_metal/hw/power_data", "PowerData", true},
+    {"rt/m2_metal/hw/power_data", "PowerData", true}
   };
 
   enhancer_.setOptions(config_.enhancements);
@@ -308,46 +329,108 @@ bool M2DataStreamer::start(QStringList* /*selected_datasources*/)
 
   try
   {
-    // Subscribe to SensorData topics
-    for (const auto topic_name : {std::string(kRosSensorTopic), std::string(kDdsSensorTopic)})
+    for (const auto& topic_cfg : config_.topics)
     {
-      auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::SensorData_>>(
-          config_.domain_id, topic_name,
-          [this, sink, topic_name](const xterra::msg::dds_::SensorData_& msg) {
-            std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-            if (!running_) return;
-            enhancer_.onSensorData(topic_name, msg, elapsedSeconds(), sink);
-            Q_EMIT dataReceived();
-          });
-      subscribers_.push_back(std::move(sub));
-    }
+      if (!topic_cfg.enabled) continue;
+      const std::string& topic_name = topic_cfg.name;
+      const std::string& type_name = topic_cfg.type_name;
 
-    // Subscribe to JointData topics
-    for (const auto topic_name : {std::string(kRosJointCommandTopic), std::string(kDdsJointCommandTopic)})
-    {
-      auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::JointData_>>(
-          config_.domain_id, topic_name,
-          [this, sink, topic_name](const xterra::msg::dds_::JointData_& msg) {
-            std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-            if (!running_) return;
-            enhancer_.onJointData(topic_name, msg, elapsedSeconds(), sink);
-            Q_EMIT dataReceived();
-          });
-      subscribers_.push_back(std::move(sub));
-    }
-
-    // Subscribe to JoyData topics
-    for (const auto topic_name : {std::string(kRosJoystickTopic), std::string(kDdsJoystickTopic)})
-    {
-      auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::JoyData_>>(
-          config_.domain_id, topic_name,
-          [this, sink, topic_name](const xterra::msg::dds_::JoyData_& msg) {
-            std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-            if (!running_) return;
-            enhancer_.onJoyData(topic_name, msg, elapsedSeconds(), sink);
-            Q_EMIT dataReceived();
-          });
-      subscribers_.push_back(std::move(sub));
+      if (type_name == "SensorData")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::SensorData_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::SensorData_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onSensorData(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "JointData")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::JointData_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::JointData_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onJointData(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "JoyData")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::JoyData_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::JoyData_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onJoyData(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "QuadLog")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::QuadLog_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::QuadLog_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onQuadLog(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "SolverStats")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::SolverStats_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::SolverStats_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onSolverStats(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "Point3D")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::Point3D_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::Point3D_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onPoint3D(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "FloatScalar")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::FloatScalar_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::FloatScalar_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onFloatScalar(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
+      else if (type_name == "PowerData")
+      {
+        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::PowerData_>>(
+            config_.domain_id, topic_name,
+            [this, sink, topic_name](const xterra::msg::dds_::PowerData_& msg) {
+              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+              if (!running_) return;
+              enhancer_.onPowerData(topic_name, msg, elapsedSeconds(), sink);
+              Q_EMIT dataReceived();
+            });
+        subscribers_.push_back(std::move(sub));
+      }
     }
 
     running_ = true;

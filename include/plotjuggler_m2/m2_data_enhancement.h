@@ -11,6 +11,11 @@
 #include "SensorData.hpp"
 #include "JointData.hpp"
 #include "JoyData.hpp"
+#include "QuadLog.hpp"
+#include "Point3D.hpp"
+#include "FloatScalar.hpp"
+#include "SolverStats.hpp"
+#include "PowerData.hpp"
 
 namespace plotjuggler_m2
 {
@@ -51,6 +56,36 @@ public:
                  const xterra::msg::dds_::JoyData_& msg,
                  double stamp,
                  const SampleSink& sink);
+
+  // Process incoming QuadLog (state estimation / reference / wbc telemetry)
+  void onQuadLog(const std::string& topic_prefix,
+                 const xterra::msg::dds_::QuadLog_& msg,
+                 double stamp,
+                 const SampleSink& sink);
+
+  // Process incoming Point3D (3D vector / tracking error telemetry)
+  void onPoint3D(const std::string& topic_prefix,
+                 const xterra::msg::dds_::Point3D_& msg,
+                 double stamp,
+                 const SampleSink& sink);
+
+  // Process incoming FloatScalar (MPC timing / scalar telemetry)
+  void onFloatScalar(const std::string& topic_prefix,
+                     const xterra::msg::dds_::FloatScalar_& msg,
+                     double stamp,
+                     const SampleSink& sink);
+
+  // Process incoming SolverStats (QP / NLP solver telemetry)
+  void onSolverStats(const std::string& topic_prefix,
+                     const xterra::msg::dds_::SolverStats_& msg,
+                     double stamp,
+                     const SampleSink& sink);
+
+  // Process incoming PowerData (Battery and BMS telemetry)
+  void onPowerData(const std::string& topic_prefix,
+                   const xterra::msg::dds_::PowerData_& msg,
+                   double stamp,
+                   const SampleSink& sink);
 
   void reset();
 

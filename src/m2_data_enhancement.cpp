@@ -276,4 +276,147 @@ void M2EnhancementEngine::emitDesiredAndErrorMetrics(const std::string& /*topic_
   sink("enhanced/summary/total_mechanical_power_des", stamp, total_p_mech_des);
 }
 
+void M2EnhancementEngine::onQuadLog(const std::string& topic_prefix,
+                                    const xterra::msg::dds_::QuadLog_& msg,
+                                    double stamp,
+                                    const SampleSink& sink)
+{
+  const std::string prefix = topic_prefix.empty() ? "quad_log" : topic_prefix;
+
+  // Contact states & probabilities
+  for (std::size_t i = 0; i < kM2LegCount; ++i)
+  {
+    const std::string leg(kLegNames[i]);
+    sink(prefix + "/contact_state/" + leg, stamp, static_cast<double>(msg.contact_state()[i]));
+    sink(prefix + "/contact_prob/" + leg, stamp, static_cast<double>(msg.contact_prob()[i]));
+  }
+
+  // Contact force (4 legs x 3 xyz)
+  for (std::size_t leg_idx = 0; leg_idx < kM2LegCount; ++leg_idx)
+  {
+    const std::string leg(kLegNames[leg_idx]);
+    sink(prefix + "/contact_force/" + leg + "/x", stamp, static_cast<double>(msg.contact_force()[leg_idx * 3 + 0]));
+    sink(prefix + "/contact_force/" + leg + "/y", stamp, static_cast<double>(msg.contact_force()[leg_idx * 3 + 1]));
+    sink(prefix + "/contact_force/" + leg + "/z", stamp, static_cast<double>(msg.contact_force()[leg_idx * 3 + 2]));
+  }
+
+  // Base Position & Orientation
+  sink(prefix + "/base_pos/x", stamp, static_cast<double>(msg.base_position().x()));
+  sink(prefix + "/base_pos/y", stamp, static_cast<double>(msg.base_position().y()));
+  sink(prefix + "/base_pos/z", stamp, static_cast<double>(msg.base_position().z()));
+
+  sink(prefix + "/base_quat/x", stamp, static_cast<double>(msg.base_orientation().x()));
+  sink(prefix + "/base_quat/y", stamp, static_cast<double>(msg.base_orientation().y()));
+  sink(prefix + "/base_quat/z", stamp, static_cast<double>(msg.base_orientation().z()));
+  sink(prefix + "/base_quat/w", stamp, static_cast<double>(msg.base_orientation().w()));
+
+  // Velocities
+  sink(prefix + "/linear_vel/x", stamp, static_cast<double>(msg.linear_velocity().x()));
+  sink(prefix + "/linear_vel/y", stamp, static_cast<double>(msg.linear_velocity().y()));
+  sink(prefix + "/linear_vel/z", stamp, static_cast<double>(msg.linear_velocity().z()));
+
+  sink(prefix + "/angular_vel/x", stamp, static_cast<double>(msg.angular_velocity().x()));
+  sink(prefix + "/angular_vel/y", stamp, static_cast<double>(msg.angular_velocity().y()));
+  sink(prefix + "/angular_vel/z", stamp, static_cast<double>(msg.angular_velocity().z()));
+
+  sink(prefix + "/plane_normal/x", stamp, static_cast<double>(msg.plane_normal().x()));
+  sink(prefix + "/plane_normal/y", stamp, static_cast<double>(msg.plane_normal().y()));
+  sink(prefix + "/plane_normal/z", stamp, static_cast<double>(msg.plane_normal().z()));
+
+  // Base Wrench (fx, fy, fz, tx, ty, tz)
+  static constexpr const char* kWrenchLabels[] = {"fx", "fy", "fz", "tx", "ty", "tz"};
+  for (std::size_t i = 0; i < 6; ++i)
+  {
+    sink(prefix + "/base_wrench/" + kWrenchLabels[i], stamp, static_cast<double>(msg.base_wrench()[i]));
+  }
+
+  // Joints (position, velocity, torque)
+  for (std::size_t i = 0; i < kM2JointCount; ++i)
+  {
+    const std::string idx_str = formatIndex(i);
+    const double q_val = static_cast<double>(msg.joint_position()[i]);
+    const double dq_val = static_cast<double>(msg.joint_velocity()[i]);
+    const double tau_val = static_cast<double>(msg.joint_torque()[i]);
+
+    sink(prefix + "/joint_position/" + idx_str, stamp, q_val);
+    sink(prefix + "/joint_velocity/" + idx_str, stamp, dq_val);
+    sink(prefix + "/joint_torque/" + idx_str, stamp, tau_val);
+
+    if (options_.leg_aliases_enabled)
+    {
+      sink(prefix + "/" + legJointAlias(i, "pos"), stamp, q_val);
+      sink(prefix + "/" + legJointAlias(i, "vel"), stamp, dq_val);
+      sink(prefix + "/" + legJointAlias(i, "tau"), stamp, tau_val);
+    }
+  }
+
+  // Foot position and velocity (4 legs x 3 xyz)
+  for (std::size_t leg_idx = 0; leg_idx < kM2LegCount; ++leg_idx)
+  {
+    const std::string leg(kLegNames[leg_idx]);
+    sink(prefix + "/foot_pos/" + leg + "/x", stamp, static_cast<double>(msg.foot_position()[leg_idx * 3 + 0]));
+    sink(prefix + "/foot_pos/" + leg + "/y", stamp, static_cast<double>(msg.foot_position()[leg_idx * 3 + 1]));
+    sink(prefix + "/foot_pos/" + leg + "/z", stamp, static_cast<double>(msg.foot_position()[leg_idx * 3 + 2]));
+
+    sink(prefix + "/foot_vel/" + leg + "/x", stamp, static_cast<double>(msg.foot_velocity()[leg_idx * 3 + 0]));
+    sink(prefix + "/foot_vel/" + leg + "/y", stamp, static_cast<double>(msg.foot_velocity()[leg_idx * 3 + 1]));
+    sink(prefix + "/foot_vel/" + leg + "/z", stamp, static_cast<double>(msg.foot_velocity()[leg_idx * 3 + 2]));
+  }
+}
+
+void M2EnhancementEngine::onPoint3D(const std::string& topic_prefix,
+                                   const xterra::msg::dds_::Point3D_& msg,
+                                   double stamp,
+                                   const SampleSink& sink)
+{
+  const std::string prefix = topic_prefix.empty() ? "point3d" : topic_prefix;
+  sink(prefix + "/x", stamp, static_cast<double>(msg.x()));
+  sink(prefix + "/y", stamp, static_cast<double>(msg.y()));
+  sink(prefix + "/z", stamp, static_cast<double>(msg.z()));
+  const double norm = std::sqrt(msg.x() * msg.x() + msg.y() * msg.y() + msg.z() * msg.z());
+  sink(prefix + "/norm", stamp, norm);
+}
+
+void M2EnhancementEngine::onFloatScalar(const std::string& topic_prefix,
+                                       const xterra::msg::dds_::FloatScalar_& msg,
+                                       double stamp,
+                                       const SampleSink& sink)
+{
+  const std::string prefix = topic_prefix.empty() ? "scalar" : topic_prefix;
+  sink(prefix + "/data", stamp, static_cast<double>(msg.data()));
+}
+
+void M2EnhancementEngine::onSolverStats(const std::string& topic_prefix,
+                                       const xterra::msg::dds_::SolverStats_& msg,
+                                       double stamp,
+                                       const SampleSink& sink)
+{
+  const std::string prefix = topic_prefix.empty() ? "solver_stats" : topic_prefix;
+  sink(prefix + "/iters", stamp, static_cast<double>(msg.iters()));
+  sink(prefix + "/max_iters", stamp, static_cast<double>(msg.max_iters()));
+  sink(prefix + "/time_ms", stamp, static_cast<double>(msg.time_ms()));
+
+  for (std::size_t i = 0; i < 6; ++i)
+  {
+    sink(prefix + "/residual/" + std::to_string(i), stamp, static_cast<double>(msg.residual()[i]));
+  }
+  for (std::size_t i = 0; i < 4; ++i)
+  {
+    sink(prefix + "/constraint_violation/" + std::to_string(i), stamp, static_cast<double>(msg.constraint_violation()[i]));
+  }
+}
+
+void M2EnhancementEngine::onPowerData(const std::string& topic_prefix,
+                                     const xterra::msg::dds_::PowerData_& msg,
+                                     double stamp,
+                                     const SampleSink& sink)
+{
+  const std::string prefix = topic_prefix.empty() ? "power" : topic_prefix;
+  sink(prefix + "/voltage", stamp, static_cast<double>(msg.voltage()));
+  sink(prefix + "/current", stamp, static_cast<double>(msg.current()));
+  sink(prefix + "/temperature", stamp, static_cast<double>(msg.temperature()));
+  sink(prefix + "/energy", stamp, static_cast<double>(msg.energy()));
+  sink(prefix + "/power_calc", stamp, static_cast<double>(msg.voltage() * msg.current()));
+}
+
 } // namespace plotjuggler_m2

@@ -30,12 +30,12 @@ find_package(CycloneDDS-CXX REQUIRED)
 # -----------------------------------------------------------------------------
 # Svan M2 IDL Code Generation
 # -----------------------------------------------------------------------------
-set(IDL_FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/m2_sdk/idl/SensorData.idl"
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/m2_sdk/idl/JointData.idl"
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/m2_sdk/idl/JoyData.idl")
+file(GLOB IDL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/m2_sdk/idl/*.idl")
 
-idlcxx_generate(TARGET svan_m2_idl_gen FILES ${IDL_FILES})
+idlcxx_generate(TARGET svan_m2_idl_gen
+  FILES ${IDL_FILES}
+  INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/m2_sdk/idl"
+  WARNINGS "no-implicit-extensibility")
 get_target_property(_idl_sources svan_m2_idl_gen INTERFACE_SOURCES)
 
 add_library(svan_m2_idl_lib STATIC ${_idl_sources})

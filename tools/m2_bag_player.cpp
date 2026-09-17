@@ -2,6 +2,11 @@
 #include "SensorData.hpp"
 #include "JointData.hpp"
 #include "JoyData.hpp"
+#include "QuadLog.hpp"
+#include "Point3D.hpp"
+#include "FloatScalar.hpp"
+#include "SolverStats.hpp"
+#include "PowerData.hpp"
 #include "third_party/mcap/mcap.hpp"
 
 #include <atomic>
@@ -143,6 +148,75 @@ int main(int argc, char* argv[])
     dds::pub::Publisher joy_pub(participant);
     dds::pub::DataWriter<xterra::msg::dds_::JoyData_> joy_writer(joy_pub, joy_topic);
 
+    // QuadLog topics
+    dds::topic::Topic<xterra::msg::dds_::QuadLog_> wbc_topic(participant, "rt/m2_metal/hw/wbc_modified");
+    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> wbc_writer(sensor_pub, wbc_topic);
+
+    dds::topic::Topic<xterra::msg::dds_::QuadLog_> est_topic(participant, "rt/m2_metal/hw/estimated");
+    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> est_writer(sensor_pub, est_topic);
+
+    dds::topic::Topic<xterra::msg::dds_::QuadLog_> gt_topic(participant, "rt/m2_metal/hw/gt_data");
+    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> gt_writer(sensor_pub, gt_topic);
+
+    dds::topic::Topic<xterra::msg::dds_::QuadLog_> ref_topic(participant, "rt/m2_metal/hw/reference");
+    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> ref_writer(sensor_pub, ref_topic);
+
+    // SolverStats topic
+    dds::topic::Topic<xterra::msg::dds_::SolverStats_> solver_topic(participant, "rt/m2_metal/hw/solver_stats");
+    dds::pub::DataWriter<xterra::msg::dds_::SolverStats_> solver_writer(sensor_pub, solver_topic);
+
+    // Point3D base_err topic
+    dds::topic::Topic<xterra::msg::dds_::Point3D_> base_err_topic(participant, "rt/m2_metal/hw/base_err");
+    dds::pub::DataWriter<xterra::msg::dds_::Point3D_> base_err_writer(sensor_pub, base_err_topic);
+
+    // FloatScalar mpc_time topic
+    dds::topic::Topic<xterra::msg::dds_::FloatScalar_> mpc_time_topic(participant, "rt/m2_metal/hw/mpc_time");
+    dds::pub::DataWriter<xterra::msg::dds_::FloatScalar_> mpc_time_writer(sensor_pub, mpc_time_topic);
+
+    // PowerData topic
+    dds::topic::Topic<xterra::msg::dds_::PowerData_> power_topic(participant, "rt/m2_metal/hw/power_data");
+    dds::pub::DataWriter<xterra::msg::dds_::PowerData_> power_writer(sensor_pub, power_topic);
+
+    auto decode_quad_log = [](const uint8_t* raw, xterra::msg::dds_::QuadLog_& quad) {
+      const float* f = reinterpret_cast<const float*>(raw + 4);
+      std::memcpy(quad.contact_state().data(), f, 4 * sizeof(float)); f += 4;
+      std::memcpy(quad.contact_prob().data(), f, 4 * sizeof(float)); f += 4;
+      std::memcpy(quad.contact_force().data(), f, 12 * sizeof(float)); f += 12;
+
+      quad.base_position().x(f[0]);
+      quad.base_position().y(f[1]);
+      quad.base_position().z(f[2]);
+      f += 3;
+
+      quad.base_orientation().x(f[0]);
+      quad.base_orientation().y(f[1]);
+      quad.base_orientation().z(f[2]);
+      quad.base_orientation().w(f[3]);
+      f += 4;
+
+      quad.linear_velocity().x(f[0]);
+      quad.linear_velocity().y(f[1]);
+      quad.linear_velocity().z(f[2]);
+      f += 3;
+
+      quad.angular_velocity().x(f[0]);
+      quad.angular_velocity().y(f[1]);
+      quad.angular_velocity().z(f[2]);
+      f += 3;
+
+      quad.plane_normal().x(f[0]);
+      quad.plane_normal().y(f[1]);
+      quad.plane_normal().z(f[2]);
+      f += 3;
+
+      std::memcpy(quad.base_wrench().data(), f, 6 * sizeof(float)); f += 6;
+      std::memcpy(quad.joint_position().data(), f, 12 * sizeof(float)); f += 12;
+      std::memcpy(quad.joint_velocity().data(), f, 12 * sizeof(float)); f += 12;
+      std::memcpy(quad.joint_torque().data(), f, 12 * sizeof(float)); f += 12;
+      std::memcpy(quad.foot_position().data(), f, 12 * sizeof(float)); f += 12;
+      std::memcpy(quad.foot_velocity().data(), f, 12 * sizeof(float));
+    };
+
     // Wait briefly for DDS endpoint announcement
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -170,6 +244,9 @@ int main(int argc, char* argv[])
       uint64_t count_sensor = 0;
       uint64_t count_cmd = 0;
       uint64_t count_joy = 0;
+      uint64_t count_quad = 0;
+      uint64_t count_solver = 0;
+      uint64_t count_other = 0;
 
       for (const auto& msgView : reader.readMessages())
       {
@@ -182,13 +259,23 @@ int main(int argc, char* argv[])
         const auto* raw = reinterpret_cast<const uint8_t*>(msgView.message.data);
         const auto size = msgView.message.dataSize;
 
-        // Skip topics we do not route
+        // Topic matching
         const bool is_sensor = (topic == "/m2_metal/hw/sensor_data" && size >= 536);
         const bool is_cmd = (topic == "/m2_metal/hw/joint_command" && size >= 244);
         const bool is_joy = ((topic == "/joystick_data" || topic == "/bt_usb/joystick_data" ||
                               topic == "/m2_metal/hw/nav2/joystick_data") && size >= 44);
+        const bool is_quad_wbc = (topic == "/m2_metal/hw/wbc_modified" && size >= 412);
+        const bool is_quad_est = (topic == "/m2_metal/hw/estimated" && size >= 412);
+        const bool is_quad_gt = (topic == "/m2_metal/hw/gt_data" && size >= 412);
+        const bool is_quad_ref = (topic == "/m2_metal/hw/reference" && size >= 412);
+        const bool is_solver = (topic == "/m2_metal/hw/solver_stats" && size >= 52);
+        const bool is_base_err = (topic == "/m2_metal/hw/base_err" && size >= 16);
+        const bool is_mpc_time = (topic == "/m2_metal/hw/mpc_time" && size >= 8);
+        const bool is_power = (topic == "/m2_metal/hw/power_data" && size >= 20);
 
-        if (!is_sensor && !is_cmd && !is_joy)
+        if (!is_sensor && !is_cmd && !is_joy &&
+            !is_quad_wbc && !is_quad_est && !is_quad_gt && !is_quad_ref &&
+            !is_solver && !is_base_err && !is_mpc_time && !is_power)
         {
           continue;
         }
@@ -272,20 +359,82 @@ int main(int argc, char* argv[])
           joy_writer.write(joy);
           count_joy++;
         }
+        else if (is_quad_wbc || is_quad_est || is_quad_gt || is_quad_ref)
+        {
+          xterra::msg::dds_::QuadLog_ quad;
+          decode_quad_log(raw, quad);
 
-        if ((count_sensor + count_cmd + count_joy) % 1000 == 0)
+          if (is_quad_wbc) wbc_writer.write(quad);
+          else if (is_quad_est) est_writer.write(quad);
+          else if (is_quad_gt) gt_writer.write(quad);
+          else if (is_quad_ref) ref_writer.write(quad);
+
+          count_quad++;
+        }
+        else if (is_solver)
+        {
+          xterra::msg::dds_::SolverStats_ stats;
+          stats.iters(*reinterpret_cast<const uint16_t*>(raw + 4));
+          stats.max_iters(*reinterpret_cast<const uint16_t*>(raw + 6));
+          const float* f = reinterpret_cast<const float*>(raw + 8);
+          std::memcpy(stats.residual().data(), f, 6 * sizeof(float)); f += 6;
+          std::memcpy(stats.constraint_violation().data(), f, 4 * sizeof(float)); f += 4;
+          stats.time_ms(*f);
+
+          solver_writer.write(stats);
+          count_solver++;
+        }
+        else if (is_base_err)
+        {
+          xterra::msg::dds_::Point3D_ pt;
+          const float* f = reinterpret_cast<const float*>(raw + 4);
+          pt.x(f[0]);
+          pt.y(f[1]);
+          pt.z(f[2]);
+
+          base_err_writer.write(pt);
+          count_other++;
+        }
+        else if (is_mpc_time)
+        {
+          xterra::msg::dds_::FloatScalar_ fs_msg;
+          const float* f = reinterpret_cast<const float*>(raw + 4);
+          fs_msg.data(*f);
+
+          mpc_time_writer.write(fs_msg);
+          count_other++;
+        }
+        else if (is_power)
+        {
+          xterra::msg::dds_::PowerData_ pwr;
+          const float* f = reinterpret_cast<const float*>(raw + 4);
+          pwr.voltage(f[0]);
+          pwr.current(f[1]);
+          pwr.temperature(f[2]);
+          pwr.energy(f[3]);
+
+          power_writer.write(pwr);
+          count_other++;
+        }
+
+        if ((count_sensor + count_cmd + count_joy + count_quad + count_solver + count_other) % 1000 == 0)
         {
           const auto now = std::chrono::steady_clock::now();
           const double elapsed = std::chrono::duration<double>(now - start_real_time).count();
           std::cout << "\r[Playback] Elapsed: " << std::fixed << std::setprecision(1) << elapsed
-                    << "s | SensorData: " << count_sensor
-                    << " | JointCmd: " << count_cmd
-                    << " | Joy: " << count_joy << std::flush;
+                    << "s | Sensor: " << count_sensor
+                    << " | Cmd: " << count_cmd
+                    << " | Joy: " << count_joy
+                    << " | QuadLog: " << count_quad
+                    << " | Solver: " << count_solver
+                    << " | Other: " << count_other << std::flush;
         }
       }
 
       std::cout << "\nFinished reading file: " << count_sensor << " SensorData, "
-                << count_cmd << " JointCmd, " << count_joy << " Joy messages." << std::endl;
+                << count_cmd << " JointCmd, " << count_joy << " Joy, "
+                << count_quad << " QuadLog, " << count_solver << " SolverStats, "
+                << count_other << " Other messages." << std::endl;
 
       loop_count++;
     } while (loop_playback && !g_stop_requested);
