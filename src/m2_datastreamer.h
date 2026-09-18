@@ -68,6 +68,8 @@ private:
   double elapsedSeconds() const;
   void appendSampleUnlocked(const std::string& series_name, double stamp, double value);
   void clearState();
+  template <typename T, typename Method>
+  void addSubscriber(const std::string& topic_name, Method method, const SampleSink& sink);
 
   std::atomic_bool running_{false};
   std::chrono::steady_clock::time_point start_time_;

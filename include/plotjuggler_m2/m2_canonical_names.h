@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
@@ -74,8 +75,22 @@ inline constexpr std::string_view kRosJointCommandTopic = "/m2_metal/hw/joint_co
 inline constexpr std::string_view kDdsJoystickTopic = "rt/mission/joystick_data";
 inline constexpr std::string_view kRosJoystickTopic = "/mission/joystick_data";
 
-std::string formatIndex(std::size_t index);
-int jointNameToIndex(std::string_view name);
-std::string legJointAlias(std::size_t index, std::string_view field);
+inline std::string formatIndex(std::size_t index)
+{
+  return (index < 10 ? "0" : "") + std::to_string(index);
+}
+
+inline int jointNameToIndex(std::string_view name)
+{
+  auto it = std::find(kJointNames.begin(), kJointNames.end(), name);
+  return it != kJointNames.end() ? static_cast<int>(std::distance(kJointNames.begin(), it)) : -1;
+}
+
+inline std::string legJointAlias(std::size_t index, std::string_view field)
+{
+  if (index >= kM2JointCount) return "";
+  return std::string("legs/") + std::string(kLegNames[index / kM2JointsPerLeg]) + "/" +
+         std::string(kJointTypes[index % kM2JointsPerLeg]) + "/" + std::string(field);
+}
 
 } // namespace plotjuggler_m2

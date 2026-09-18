@@ -65,6 +65,70 @@ void printUsage(const char* prog_name)
             << std::endl;
 }
 
+template <typename T>
+inline void readFloats(T& dst, const float*& src, std::size_t n)
+{
+  std::memcpy(dst.data(), src, n * sizeof(float));
+  src += n;
+}
+
+inline void decodeSensorData(const uint8_t* raw, xterra::msg::dds_::SensorData_& sensor)
+{
+  const float* f = reinterpret_cast<const float*>(raw + 4);
+  readFloats(sensor.driver_fault(), f, 12);
+  readFloats(sensor.driver_voltage(), f, 12);
+  readFloats(sensor.driver_power(), f, 12);
+  readFloats(sensor.fet_temp(), f, 12);
+  readFloats(sensor.motor_temp(), f, 12);
+  readFloats(sensor.q(), f, 12);
+  readFloats(sensor.dq(), f, 12);
+  readFloats(sensor.q_current(), f, 12);
+  readFloats(sensor.ddq(), f, 12);
+  readFloats(sensor.tau_est(), f, 12);
+  readFloats(sensor.quat(), f, 4);
+  readFloats(sensor.gyro(), f, 3);
+  readFloats(sensor.accel(), f, 3);
+  readFloats(sensor.rpy(), f, 3);
+}
+
+inline void decodeJointCmd(const uint8_t* raw, xterra::msg::dds_::JointData_& cmd)
+{
+  const float* f = reinterpret_cast<const float*>(raw + 4);
+  readFloats(cmd.q(), f, 12);
+  readFloats(cmd.dq(), f, 12);
+  readFloats(cmd.kp(), f, 12);
+  readFloats(cmd.kd(), f, 12);
+  readFloats(cmd.tau(), f, 12);
+}
+
+inline void decodeQuadLog(const uint8_t* raw, xterra::msg::dds_::QuadLog_& quad)
+{
+  const float* f = reinterpret_cast<const float*>(raw + 4);
+  readFloats(quad.contact_state(), f, 4);
+  readFloats(quad.contact_prob(), f, 4);
+  readFloats(quad.contact_force(), f, 12);
+
+  quad.base_position().x(f[0]); quad.base_position().y(f[1]); quad.base_position().z(f[2]); f += 3;
+  quad.base_orientation().x(f[0]); quad.base_orientation().y(f[1]);
+  quad.base_orientation().z(f[2]); quad.base_orientation().w(f[3]); f += 4;
+  quad.linear_velocity().x(f[0]); quad.linear_velocity().y(f[1]); quad.linear_velocity().z(f[2]); f += 3;
+  quad.angular_velocity().x(f[0]); quad.angular_velocity().y(f[1]); quad.angular_velocity().z(f[2]); f += 3;
+  quad.plane_normal().x(f[0]); quad.plane_normal().y(f[1]); quad.plane_normal().z(f[2]); f += 3;
+
+  readFloats(quad.base_wrench(), f, 6);
+  readFloats(quad.joint_position(), f, 12);
+  readFloats(quad.joint_velocity(), f, 12);
+  readFloats(quad.joint_torque(), f, 12);
+  readFloats(quad.foot_position(), f, 12);
+  readFloats(quad.foot_velocity(), f, 12);
+}
+
+template <typename T>
+inline dds::pub::DataWriter<T> makeWriter(dds::domain::DomainParticipant& dp, dds::pub::Publisher& pub, const char* topic)
+{
+  return dds::pub::DataWriter<T>(pub, dds::topic::Topic<T>(dp, topic));
+}
+
 int main(int argc, char* argv[])
 {
   if (argc < 2)
@@ -132,90 +196,19 @@ int main(int argc, char* argv[])
   try
   {
     dds::domain::DomainParticipant participant(domain_id);
+    dds::pub::Publisher pub(participant);
 
-    dds::topic::Topic<xterra::msg::dds_::SensorData_> sensor_topic(
-        participant, "rt/m2_metal/hw/sensor_data");
-    dds::pub::Publisher sensor_pub(participant);
-    dds::pub::DataWriter<xterra::msg::dds_::SensorData_> sensor_writer(sensor_pub, sensor_topic);
-
-    dds::topic::Topic<xterra::msg::dds_::JointData_> cmd_topic(
-        participant, "rt/m2_metal/hw/joint_command");
-    dds::pub::Publisher cmd_pub(participant);
-    dds::pub::DataWriter<xterra::msg::dds_::JointData_> cmd_writer(cmd_pub, cmd_topic);
-
-    dds::topic::Topic<xterra::msg::dds_::JoyData_> joy_topic(
-        participant, "rt/mission/joystick_data");
-    dds::pub::Publisher joy_pub(participant);
-    dds::pub::DataWriter<xterra::msg::dds_::JoyData_> joy_writer(joy_pub, joy_topic);
-
-    // QuadLog topics
-    dds::topic::Topic<xterra::msg::dds_::QuadLog_> wbc_topic(participant, "rt/m2_metal/hw/wbc_modified");
-    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> wbc_writer(sensor_pub, wbc_topic);
-
-    dds::topic::Topic<xterra::msg::dds_::QuadLog_> est_topic(participant, "rt/m2_metal/hw/estimated");
-    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> est_writer(sensor_pub, est_topic);
-
-    dds::topic::Topic<xterra::msg::dds_::QuadLog_> gt_topic(participant, "rt/m2_metal/hw/gt_data");
-    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> gt_writer(sensor_pub, gt_topic);
-
-    dds::topic::Topic<xterra::msg::dds_::QuadLog_> ref_topic(participant, "rt/m2_metal/hw/reference");
-    dds::pub::DataWriter<xterra::msg::dds_::QuadLog_> ref_writer(sensor_pub, ref_topic);
-
-    // SolverStats topic
-    dds::topic::Topic<xterra::msg::dds_::SolverStats_> solver_topic(participant, "rt/m2_metal/hw/solver_stats");
-    dds::pub::DataWriter<xterra::msg::dds_::SolverStats_> solver_writer(sensor_pub, solver_topic);
-
-    // Point3D base_err topic
-    dds::topic::Topic<xterra::msg::dds_::Point3D_> base_err_topic(participant, "rt/m2_metal/hw/base_err");
-    dds::pub::DataWriter<xterra::msg::dds_::Point3D_> base_err_writer(sensor_pub, base_err_topic);
-
-    // FloatScalar mpc_time topic
-    dds::topic::Topic<xterra::msg::dds_::FloatScalar_> mpc_time_topic(participant, "rt/m2_metal/hw/mpc_time");
-    dds::pub::DataWriter<xterra::msg::dds_::FloatScalar_> mpc_time_writer(sensor_pub, mpc_time_topic);
-
-    // PowerData topic
-    dds::topic::Topic<xterra::msg::dds_::PowerData_> power_topic(participant, "rt/m2_metal/hw/power_data");
-    dds::pub::DataWriter<xterra::msg::dds_::PowerData_> power_writer(sensor_pub, power_topic);
-
-    auto decode_quad_log = [](const uint8_t* raw, xterra::msg::dds_::QuadLog_& quad) {
-      const float* f = reinterpret_cast<const float*>(raw + 4);
-      std::memcpy(quad.contact_state().data(), f, 4 * sizeof(float)); f += 4;
-      std::memcpy(quad.contact_prob().data(), f, 4 * sizeof(float)); f += 4;
-      std::memcpy(quad.contact_force().data(), f, 12 * sizeof(float)); f += 12;
-
-      quad.base_position().x(f[0]);
-      quad.base_position().y(f[1]);
-      quad.base_position().z(f[2]);
-      f += 3;
-
-      quad.base_orientation().x(f[0]);
-      quad.base_orientation().y(f[1]);
-      quad.base_orientation().z(f[2]);
-      quad.base_orientation().w(f[3]);
-      f += 4;
-
-      quad.linear_velocity().x(f[0]);
-      quad.linear_velocity().y(f[1]);
-      quad.linear_velocity().z(f[2]);
-      f += 3;
-
-      quad.angular_velocity().x(f[0]);
-      quad.angular_velocity().y(f[1]);
-      quad.angular_velocity().z(f[2]);
-      f += 3;
-
-      quad.plane_normal().x(f[0]);
-      quad.plane_normal().y(f[1]);
-      quad.plane_normal().z(f[2]);
-      f += 3;
-
-      std::memcpy(quad.base_wrench().data(), f, 6 * sizeof(float)); f += 6;
-      std::memcpy(quad.joint_position().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(quad.joint_velocity().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(quad.joint_torque().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(quad.foot_position().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(quad.foot_velocity().data(), f, 12 * sizeof(float));
-    };
+    auto sensor_writer = makeWriter<xterra::msg::dds_::SensorData_>(participant, pub, "rt/m2_metal/hw/sensor_data");
+    auto cmd_writer = makeWriter<xterra::msg::dds_::JointData_>(participant, pub, "rt/m2_metal/hw/joint_command");
+    auto joy_writer = makeWriter<xterra::msg::dds_::JoyData_>(participant, pub, "rt/mission/joystick_data");
+    auto wbc_writer = makeWriter<xterra::msg::dds_::QuadLog_>(participant, pub, "rt/m2_metal/hw/wbc_modified");
+    auto est_writer = makeWriter<xterra::msg::dds_::QuadLog_>(participant, pub, "rt/m2_metal/hw/estimated");
+    auto gt_writer = makeWriter<xterra::msg::dds_::QuadLog_>(participant, pub, "rt/m2_metal/hw/gt_data");
+    auto ref_writer = makeWriter<xterra::msg::dds_::QuadLog_>(participant, pub, "rt/m2_metal/hw/reference");
+    auto solver_writer = makeWriter<xterra::msg::dds_::SolverStats_>(participant, pub, "rt/m2_metal/hw/solver_stats");
+    auto base_err_writer = makeWriter<xterra::msg::dds_::Point3D_>(participant, pub, "rt/m2_metal/hw/base_err");
+    auto mpc_time_writer = makeWriter<xterra::msg::dds_::FloatScalar_>(participant, pub, "rt/m2_metal/hw/mpc_time");
+    auto power_writer = makeWriter<xterra::msg::dds_::PowerData_>(participant, pub, "rt/m2_metal/hw/power_data");
 
     // Wait briefly for DDS endpoint announcement
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -241,12 +234,8 @@ int main(int argc, char* argv[])
       auto start_real_time = std::chrono::steady_clock::now();
       bool first_msg = true;
 
-      uint64_t count_sensor = 0;
-      uint64_t count_cmd = 0;
-      uint64_t count_joy = 0;
-      uint64_t count_quad = 0;
-      uint64_t count_solver = 0;
-      uint64_t count_other = 0;
+      uint64_t count_sensor = 0, count_cmd = 0, count_joy = 0;
+      uint64_t count_quad = 0, count_solver = 0, count_other = 0;
 
       for (const auto& msgView : reader.readMessages())
       {
@@ -259,26 +248,24 @@ int main(int argc, char* argv[])
         const auto* raw = reinterpret_cast<const uint8_t*>(msgView.message.data);
         const auto size = msgView.message.dataSize;
 
-        // Topic matching
-        const bool is_sensor = (topic == "/m2_metal/hw/sensor_data" && size >= 536);
-        const bool is_cmd = (topic == "/m2_metal/hw/joint_command" && size >= 244);
-        const bool is_joy = ((topic == "/joystick_data" || topic == "/bt_usb/joystick_data" ||
-                              topic == "/m2_metal/hw/nav2/joystick_data") && size >= 44);
-        const bool is_quad_wbc = (topic == "/m2_metal/hw/wbc_modified" && size >= 412);
-        const bool is_quad_est = (topic == "/m2_metal/hw/estimated" && size >= 412);
-        const bool is_quad_gt = (topic == "/m2_metal/hw/gt_data" && size >= 412);
-        const bool is_quad_ref = (topic == "/m2_metal/hw/reference" && size >= 412);
-        const bool is_solver = (topic == "/m2_metal/hw/solver_stats" && size >= 52);
-        const bool is_base_err = (topic == "/m2_metal/hw/base_err" && size >= 16);
-        const bool is_mpc_time = (topic == "/m2_metal/hw/mpc_time" && size >= 8);
-        const bool is_power = (topic == "/m2_metal/hw/power_data" && size >= 20);
-
-        if (!is_sensor && !is_cmd && !is_joy &&
-            !is_quad_wbc && !is_quad_est && !is_quad_gt && !is_quad_ref &&
-            !is_solver && !is_base_err && !is_mpc_time && !is_power)
-        {
-          continue;
+        enum class MsgKind { None, Sensor, Cmd, Joy, QuadWbc, QuadEst, QuadGt, QuadRef, Solver, BaseErr, MpcTime, Power };
+        MsgKind kind = MsgKind::None;
+        if (topic == "/m2_metal/hw/sensor_data" && size >= 536) kind = MsgKind::Sensor;
+        else if (topic == "/m2_metal/hw/joint_command" && size >= 244) kind = MsgKind::Cmd;
+        else if ((topic == "/joystick_data" || topic == "/bt_usb/joystick_data" ||
+                  topic == "/m2_metal/hw/nav2/joystick_data") && size >= 44) kind = MsgKind::Joy;
+        else if (size >= 412) {
+          if (topic == "/m2_metal/hw/wbc_modified") kind = MsgKind::QuadWbc;
+          else if (topic == "/m2_metal/hw/estimated") kind = MsgKind::QuadEst;
+          else if (topic == "/m2_metal/hw/gt_data") kind = MsgKind::QuadGt;
+          else if (topic == "/m2_metal/hw/reference") kind = MsgKind::QuadRef;
         }
+        else if (topic == "/m2_metal/hw/solver_stats" && size >= 52) kind = MsgKind::Solver;
+        else if (topic == "/m2_metal/hw/base_err" && size >= 16) kind = MsgKind::BaseErr;
+        else if (topic == "/m2_metal/hw/mpc_time" && size >= 8) kind = MsgKind::MpcTime;
+        else if (topic == "/m2_metal/hw/power_data" && size >= 20) kind = MsgKind::Power;
+
+        if (kind == MsgKind::None) continue;
 
         // Pacing
         const uint64_t log_time_ns = msgView.message.logTime;
@@ -302,119 +289,82 @@ int main(int argc, char* argv[])
         }
 
         // Publish to CycloneDDS
-        if (is_sensor)
+        switch (kind)
         {
-          xterra::msg::dds_::SensorData_ sensor;
-          const float* f = reinterpret_cast<const float*>(raw + 4);
-
-          std::memcpy(sensor.driver_fault().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.driver_voltage().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.driver_power().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.fet_temp().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.motor_temp().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.q().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.dq().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.q_current().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.ddq().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.tau_est().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(sensor.quat().data(), f, 4 * sizeof(float)); f += 4;
-          std::memcpy(sensor.gyro().data(), f, 3 * sizeof(float)); f += 3;
-          std::memcpy(sensor.accel().data(), f, 3 * sizeof(float)); f += 3;
-          std::memcpy(sensor.rpy().data(), f, 3 * sizeof(float));
-
-          sensor_writer.write(sensor);
-          count_sensor++;
-        }
-        else if (is_cmd)
-        {
-          xterra::msg::dds_::JointData_ cmd;
-          const float* f = reinterpret_cast<const float*>(raw + 4);
-
-          std::memcpy(cmd.q().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(cmd.dq().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(cmd.kp().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(cmd.kd().data(), f, 12 * sizeof(float)); f += 12;
-          std::memcpy(cmd.tau().data(), f, 12 * sizeof(float));
-
-          cmd_writer.write(cmd);
-          count_cmd++;
-        }
-        else if (is_joy)
-        {
-          xterra::msg::dds_::JoyData_ joy;
-          joy.priority(raw[4]);
-
-          const float* axes = reinterpret_cast<const float*>(raw + 8);
-          for (std::size_t a = 0; a < 6; ++a)
-          {
-            joy.axes()[a] = axes[a];
+          case MsgKind::Sensor: {
+            xterra::msg::dds_::SensorData_ sensor;
+            decodeSensorData(raw, sensor);
+            sensor_writer.write(sensor);
+            count_sensor++;
+            break;
           }
-
-          const uint8_t* btns = raw + 32;
-          for (std::size_t b = 0; b < 12; ++b)
-          {
-            joy.buttons()[b] = btns[b];
+          case MsgKind::Cmd: {
+            xterra::msg::dds_::JointData_ cmd;
+            decodeJointCmd(raw, cmd);
+            cmd_writer.write(cmd);
+            count_cmd++;
+            break;
           }
-
-          joy_writer.write(joy);
-          count_joy++;
-        }
-        else if (is_quad_wbc || is_quad_est || is_quad_gt || is_quad_ref)
-        {
-          xterra::msg::dds_::QuadLog_ quad;
-          decode_quad_log(raw, quad);
-
-          if (is_quad_wbc) wbc_writer.write(quad);
-          else if (is_quad_est) est_writer.write(quad);
-          else if (is_quad_gt) gt_writer.write(quad);
-          else if (is_quad_ref) ref_writer.write(quad);
-
-          count_quad++;
-        }
-        else if (is_solver)
-        {
-          xterra::msg::dds_::SolverStats_ stats;
-          stats.iters(*reinterpret_cast<const uint16_t*>(raw + 4));
-          stats.max_iters(*reinterpret_cast<const uint16_t*>(raw + 6));
-          const float* f = reinterpret_cast<const float*>(raw + 8);
-          std::memcpy(stats.residual().data(), f, 6 * sizeof(float)); f += 6;
-          std::memcpy(stats.constraint_violation().data(), f, 4 * sizeof(float)); f += 4;
-          stats.time_ms(*f);
-
-          solver_writer.write(stats);
-          count_solver++;
-        }
-        else if (is_base_err)
-        {
-          xterra::msg::dds_::Point3D_ pt;
-          const float* f = reinterpret_cast<const float*>(raw + 4);
-          pt.x(f[0]);
-          pt.y(f[1]);
-          pt.z(f[2]);
-
-          base_err_writer.write(pt);
-          count_other++;
-        }
-        else if (is_mpc_time)
-        {
-          xterra::msg::dds_::FloatScalar_ fs_msg;
-          const float* f = reinterpret_cast<const float*>(raw + 4);
-          fs_msg.data(*f);
-
-          mpc_time_writer.write(fs_msg);
-          count_other++;
-        }
-        else if (is_power)
-        {
-          xterra::msg::dds_::PowerData_ pwr;
-          const float* f = reinterpret_cast<const float*>(raw + 4);
-          pwr.voltage(f[0]);
-          pwr.current(f[1]);
-          pwr.temperature(f[2]);
-          pwr.energy(f[3]);
-
-          power_writer.write(pwr);
-          count_other++;
+          case MsgKind::Joy: {
+            xterra::msg::dds_::JoyData_ joy;
+            joy.priority(raw[4]);
+            const float* axes = reinterpret_cast<const float*>(raw + 8);
+            for (std::size_t a = 0; a < 6; ++a) joy.axes()[a] = axes[a];
+            const uint8_t* btns = raw + 32;
+            for (std::size_t b = 0; b < 12; ++b) joy.buttons()[b] = btns[b];
+            joy_writer.write(joy);
+            count_joy++;
+            break;
+          }
+          case MsgKind::QuadWbc:
+          case MsgKind::QuadEst:
+          case MsgKind::QuadGt:
+          case MsgKind::QuadRef: {
+            xterra::msg::dds_::QuadLog_ quad;
+            decodeQuadLog(raw, quad);
+            if (kind == MsgKind::QuadWbc) wbc_writer.write(quad);
+            else if (kind == MsgKind::QuadEst) est_writer.write(quad);
+            else if (kind == MsgKind::QuadGt) gt_writer.write(quad);
+            else if (kind == MsgKind::QuadRef) ref_writer.write(quad);
+            count_quad++;
+            break;
+          }
+          case MsgKind::Solver: {
+            xterra::msg::dds_::SolverStats_ stats;
+            stats.iters(*reinterpret_cast<const uint16_t*>(raw + 4));
+            stats.max_iters(*reinterpret_cast<const uint16_t*>(raw + 6));
+            const float* f = reinterpret_cast<const float*>(raw + 8);
+            readFloats(stats.residual(), f, 6);
+            readFloats(stats.constraint_violation(), f, 4);
+            stats.time_ms(*f);
+            solver_writer.write(stats);
+            count_solver++;
+            break;
+          }
+          case MsgKind::BaseErr: {
+            xterra::msg::dds_::Point3D_ pt;
+            const float* f = reinterpret_cast<const float*>(raw + 4);
+            pt.x(f[0]); pt.y(f[1]); pt.z(f[2]);
+            base_err_writer.write(pt);
+            count_other++;
+            break;
+          }
+          case MsgKind::MpcTime: {
+            xterra::msg::dds_::FloatScalar_ fs_msg;
+            fs_msg.data(*reinterpret_cast<const float*>(raw + 4));
+            mpc_time_writer.write(fs_msg);
+            count_other++;
+            break;
+          }
+          case MsgKind::Power: {
+            xterra::msg::dds_::PowerData_ pwr;
+            const float* f = reinterpret_cast<const float*>(raw + 4);
+            pwr.voltage(f[0]); pwr.current(f[1]); pwr.temperature(f[2]); pwr.energy(f[3]);
+            power_writer.write(pwr);
+            count_other++;
+            break;
+          }
+          default: break;
         }
 
         if ((count_sensor + count_cmd + count_joy + count_quad + count_solver + count_other) % 1000 == 0)

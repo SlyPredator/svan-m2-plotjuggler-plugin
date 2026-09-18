@@ -74,23 +74,15 @@ int main()
     if (msgView.channel->topic == "/m2_metal/hw/sensor_data" && msgView.message.dataSize >= 536)
     {
       xterra::msg::dds_::SensorData_ sensor;
-      const auto* raw = reinterpret_cast<const uint8_t*>(msgView.message.data);
-      const float* f = reinterpret_cast<const float*>(raw + 4);
-
-      std::memcpy(sensor.driver_fault().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.driver_voltage().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.driver_power().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.fet_temp().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.motor_temp().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.q().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.dq().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.q_current().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.ddq().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.tau_est().data(), f, 12 * sizeof(float)); f += 12;
-      std::memcpy(sensor.quat().data(), f, 4 * sizeof(float)); f += 4;
-      std::memcpy(sensor.gyro().data(), f, 3 * sizeof(float)); f += 3;
-      std::memcpy(sensor.accel().data(), f, 3 * sizeof(float)); f += 3;
-      std::memcpy(sensor.rpy().data(), f, 3 * sizeof(float));
+      const float* f = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(msgView.message.data) + 4);
+      auto readF = [&](auto& dst, std::size_t n) { std::memcpy(dst.data(), f, n * sizeof(float)); f += n; };
+      readF(sensor.driver_fault(), 12); readF(sensor.driver_voltage(), 12);
+      readF(sensor.driver_power(), 12); readF(sensor.fet_temp(), 12);
+      readF(sensor.motor_temp(), 12); readF(sensor.q(), 12);
+      readF(sensor.dq(), 12); readF(sensor.q_current(), 12);
+      readF(sensor.ddq(), 12); readF(sensor.tau_est(), 12);
+      readF(sensor.quat(), 4); readF(sensor.gyro(), 3);
+      readF(sensor.accel(), 3); readF(sensor.rpy(), 3);
 
       writer.write(sensor);
       published_count++;

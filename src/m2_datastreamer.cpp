@@ -85,7 +85,36 @@ private:
   dds::sub::DataReader<T> reader_;
 };
 
+struct EnhanceField
+{
+  const char* xml_name;
+  const char* settings_name;
+  const char* label;
+  bool EnhancementOptions::* member;
+};
+
+constexpr EnhanceField kEnhanceFields[] = {
+  {"pd_torque", "pd_torque_enabled", "Calculate Desired PD Torques (tau_des, tau_p, tau_d)", &EnhancementOptions::pd_torque_enabled},
+  {"joint_power", "joint_power_enabled", "Calculate Instantaneous Mechanical Power (P = tau * dq)", &EnhancementOptions::joint_power_enabled},
+  {"tracking_error", "tracking_error_enabled", "Calculate Tracking Errors (q_cmd - q_act, dq_cmd - dq_act)", &EnhancementOptions::tracking_error_enabled},
+  {"leg_aliases", "leg_aliases_enabled", "Generate Leg Aliases (legs/FR/hip/q, etc.)", &EnhancementOptions::leg_aliases_enabled},
+  {"metric_first", "metric_first_aliases_enabled", "Generate 1-Drag Multi-Curve Aliases (joints*/q/00)", &EnhancementOptions::metric_first_aliases_enabled}
+};
+
 } // namespace
+
+template <typename T, typename Method>
+void M2DataStreamer::addSubscriber(const std::string& topic_name, Method method, const SampleSink& sink)
+{
+  subscribers_.push_back(std::make_unique<DdsListenerImpl<T>>(
+      config_.domain_id, topic_name,
+      [this, sink, topic_name, method](const T& msg) {
+        std::lock_guard<std::mutex> callback_lock(callback_mutex_);
+        if (!running_) return;
+        (enhancer_.*method)(topic_name, msg, elapsedSeconds(), sink);
+        Q_EMIT dataReceived();
+      }));
+}
 
 M2DataStreamer::M2DataStreamer()
 {
@@ -114,11 +143,10 @@ void M2DataStreamer::loadDefaultSettings()
   config_.network_interface = settings.value("network_interface", "").toString().toStdString();
   config_.clear_existing_data = settings.value("clear_existing_data", true).toBool();
 
-  config_.enhancements.pd_torque_enabled = settings.value("pd_torque_enabled", true).toBool();
-  config_.enhancements.joint_power_enabled = settings.value("joint_power_enabled", true).toBool();
-  config_.enhancements.tracking_error_enabled = settings.value("tracking_error_enabled", true).toBool();
-  config_.enhancements.leg_aliases_enabled = settings.value("leg_aliases_enabled", true).toBool();
-  config_.enhancements.metric_first_aliases_enabled = settings.value("metric_first_aliases_enabled", true).toBool();
+  for (const auto& f : kEnhanceFields)
+  {
+    config_.enhancements.*(f.member) = settings.value(f.settings_name, true).toBool();
+  }
 
   config_.topics = {
     {std::string(kRosSensorTopic), "SensorData", true},
@@ -126,29 +154,20 @@ void M2DataStreamer::loadDefaultSettings()
     {std::string(kRosJointCommandTopic), "JointData", true},
     {std::string(kDdsJointCommandTopic), "JointData", true},
     {std::string(kRosJoystickTopic), "JoyData", true},
-    {std::string(kDdsJoystickTopic), "JoyData", true},
-    // QuadLog telemetry
-    {"/m2_metal/hw/wbc_modified", "QuadLog", true},
-    {"rt/m2_metal/hw/wbc_modified", "QuadLog", true},
-    {"/m2_metal/hw/estimated", "QuadLog", true},
-    {"rt/m2_metal/hw/estimated", "QuadLog", true},
-    {"/m2_metal/hw/gt_data", "QuadLog", true},
-    {"rt/m2_metal/hw/gt_data", "QuadLog", true},
-    {"/m2_metal/hw/reference", "QuadLog", true},
-    {"rt/m2_metal/hw/reference", "QuadLog", true},
-    // SolverStats telemetry
-    {"/m2_metal/hw/solver_stats", "SolverStats", true},
-    {"rt/m2_metal/hw/solver_stats", "SolverStats", true},
-    // Point3D error telemetry
-    {"/m2_metal/hw/base_err", "Point3D", true},
-    {"rt/m2_metal/hw/base_err", "Point3D", true},
-    // FloatScalar timing telemetry
-    {"/m2_metal/hw/mpc_time", "FloatScalar", true},
-    {"rt/m2_metal/hw/mpc_time", "FloatScalar", true},
-    // PowerData telemetry
-    {"/m2_metal/hw/power_data", "PowerData", true},
-    {"rt/m2_metal/hw/power_data", "PowerData", true}
+    {std::string(kDdsJoystickTopic), "JoyData", true}
   };
+
+  struct NamedType { const char* name; const char* type; };
+  for (const auto& t : {
+    NamedType{"wbc_modified", "QuadLog"}, {"estimated", "QuadLog"},
+    NamedType{"gt_data", "QuadLog"}, {"reference", "QuadLog"},
+    NamedType{"solver_stats", "SolverStats"}, {"base_err", "Point3D"},
+    NamedType{"mpc_time", "FloatScalar"}, {"power_data", "PowerData"}
+  })
+  {
+    config_.topics.push_back({std::string("/m2_metal/hw/") + t.name, t.type, true});
+    config_.topics.push_back({std::string("rt/m2_metal/hw/") + t.name, t.type, true});
+  }
 
   enhancer_.setOptions(config_.enhancements);
 }
@@ -161,11 +180,10 @@ void M2DataStreamer::saveDefaultSettings() const
   settings.setValue("network_interface", QString::fromStdString(config_.network_interface));
   settings.setValue("clear_existing_data", config_.clear_existing_data);
 
-  settings.setValue("pd_torque_enabled", config_.enhancements.pd_torque_enabled);
-  settings.setValue("joint_power_enabled", config_.enhancements.joint_power_enabled);
-  settings.setValue("tracking_error_enabled", config_.enhancements.tracking_error_enabled);
-  settings.setValue("leg_aliases_enabled", config_.enhancements.leg_aliases_enabled);
-  settings.setValue("metric_first_aliases_enabled", config_.enhancements.metric_first_aliases_enabled);
+  for (const auto& f : kEnhanceFields)
+  {
+    settings.setValue(f.settings_name, config_.enhancements.*(f.member));
+  }
 }
 
 void M2DataStreamer::showSettingsDialog()
@@ -203,26 +221,14 @@ void M2DataStreamer::showSettingsDialog()
   auto* enhance_group = new QGroupBox(tr("Telemetry & Math Enhancements"), &dialog);
   auto* enhance_layout = new QVBoxLayout(enhance_group);
 
-  auto* pd_chk = new QCheckBox(tr("Calculate Desired PD Torques (tau_des, tau_p, tau_d)"), enhance_group);
-  pd_chk->setChecked(config_.enhancements.pd_torque_enabled);
-  enhance_layout->addWidget(pd_chk);
-
-  auto* power_chk = new QCheckBox(tr("Calculate Instantaneous Mechanical Power (P = tau * dq)"), enhance_group);
-  power_chk->setChecked(config_.enhancements.joint_power_enabled);
-  enhance_layout->addWidget(power_chk);
-
-  auto* error_chk = new QCheckBox(tr("Calculate Tracking Errors (q_cmd - q_act, dq_cmd - dq_act)"), enhance_group);
-  error_chk->setChecked(config_.enhancements.tracking_error_enabled);
-  enhance_layout->addWidget(error_chk);
-
-  auto* leg_chk = new QCheckBox(tr("Generate Leg Aliases (legs/FR/hip/q, etc.)"), enhance_group);
-  leg_chk->setChecked(config_.enhancements.leg_aliases_enabled);
-  enhance_layout->addWidget(leg_chk);
-
-  auto* metric_chk = new QCheckBox(tr("Generate 1-Drag Multi-Curve Aliases (joints*/q/00)"), enhance_group);
-  metric_chk->setChecked(config_.enhancements.metric_first_aliases_enabled);
-  enhance_layout->addWidget(metric_chk);
-
+  std::vector<QCheckBox*> check_boxes;
+  for (const auto& f : kEnhanceFields)
+  {
+    auto* chk = new QCheckBox(tr(f.label), enhance_group);
+    chk->setChecked(config_.enhancements.*(f.member));
+    enhance_layout->addWidget(chk);
+    check_boxes.push_back(chk);
+  }
   layout->addWidget(enhance_group);
 
   auto* clear_chk = new QCheckBox(tr("Clear existing plots on stream start"), &dialog);
@@ -240,11 +246,10 @@ void M2DataStreamer::showSettingsDialog()
     config_.network_interface = iface_combo->currentData().toString().toStdString();
     config_.clear_existing_data = clear_chk->isChecked();
 
-    config_.enhancements.pd_torque_enabled = pd_chk->isChecked();
-    config_.enhancements.joint_power_enabled = power_chk->isChecked();
-    config_.enhancements.tracking_error_enabled = error_chk->isChecked();
-    config_.enhancements.leg_aliases_enabled = leg_chk->isChecked();
-    config_.enhancements.metric_first_aliases_enabled = metric_chk->isChecked();
+    for (std::size_t i = 0; i < check_boxes.size(); ++i)
+    {
+      config_.enhancements.*(kEnhanceFields[i].member) = check_boxes[i]->isChecked();
+    }
 
     enhancer_.setOptions(config_.enhancements);
     saveDefaultSettings();
@@ -257,11 +262,10 @@ bool M2DataStreamer::xmlSaveState(QDomDocument& doc, QDomElement& parent_element
   elem.setAttribute("domain_id", config_.domain_id);
   elem.setAttribute("network_interface", QString::fromStdString(config_.network_interface));
   elem.setAttribute("clear_existing_data", config_.clear_existing_data ? "true" : "false");
-  elem.setAttribute("pd_torque", config_.enhancements.pd_torque_enabled ? "true" : "false");
-  elem.setAttribute("joint_power", config_.enhancements.joint_power_enabled ? "true" : "false");
-  elem.setAttribute("tracking_error", config_.enhancements.tracking_error_enabled ? "true" : "false");
-  elem.setAttribute("leg_aliases", config_.enhancements.leg_aliases_enabled ? "true" : "false");
-  elem.setAttribute("metric_first", config_.enhancements.metric_first_aliases_enabled ? "true" : "false");
+  for (const auto& f : kEnhanceFields)
+  {
+    elem.setAttribute(f.xml_name, (config_.enhancements.*(f.member)) ? "true" : "false");
+  }
   parent_element.appendChild(elem);
   return true;
 }
@@ -275,11 +279,10 @@ bool M2DataStreamer::xmlLoadState(const QDomElement& parent_element)
     config_.network_interface = elem.attribute("network_interface", "").toStdString();
     config_.clear_existing_data = (elem.attribute("clear_existing_data", "true") == "true");
 
-    config_.enhancements.pd_torque_enabled = (elem.attribute("pd_torque", "true") == "true");
-    config_.enhancements.joint_power_enabled = (elem.attribute("joint_power", "true") == "true");
-    config_.enhancements.tracking_error_enabled = (elem.attribute("tracking_error", "true") == "true");
-    config_.enhancements.leg_aliases_enabled = (elem.attribute("leg_aliases", "true") == "true");
-    config_.enhancements.metric_first_aliases_enabled = (elem.attribute("metric_first", "true") == "true");
+    for (const auto& f : kEnhanceFields)
+    {
+      config_.enhancements.*(f.member) = (elem.attribute(f.xml_name, "true") == "true");
+    }
 
     enhancer_.setOptions(config_.enhancements);
   }
@@ -335,102 +338,14 @@ bool M2DataStreamer::start(QStringList* /*selected_datasources*/)
       const std::string& topic_name = topic_cfg.name;
       const std::string& type_name = topic_cfg.type_name;
 
-      if (type_name == "SensorData")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::SensorData_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::SensorData_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onSensorData(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "JointData")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::JointData_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::JointData_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onJointData(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "JoyData")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::JoyData_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::JoyData_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onJoyData(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "QuadLog")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::QuadLog_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::QuadLog_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onQuadLog(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "SolverStats")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::SolverStats_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::SolverStats_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onSolverStats(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "Point3D")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::Point3D_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::Point3D_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onPoint3D(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "FloatScalar")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::FloatScalar_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::FloatScalar_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onFloatScalar(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
-      else if (type_name == "PowerData")
-      {
-        auto sub = std::make_unique<DdsListenerImpl<xterra::msg::dds_::PowerData_>>(
-            config_.domain_id, topic_name,
-            [this, sink, topic_name](const xterra::msg::dds_::PowerData_& msg) {
-              std::lock_guard<std::mutex> callback_lock(callback_mutex_);
-              if (!running_) return;
-              enhancer_.onPowerData(topic_name, msg, elapsedSeconds(), sink);
-              Q_EMIT dataReceived();
-            });
-        subscribers_.push_back(std::move(sub));
-      }
+      if (type_name == "SensorData") addSubscriber<xterra::msg::dds_::SensorData_>(topic_name, &M2EnhancementEngine::onSensorData, sink);
+      else if (type_name == "JointData") addSubscriber<xterra::msg::dds_::JointData_>(topic_name, &M2EnhancementEngine::onJointData, sink);
+      else if (type_name == "JoyData") addSubscriber<xterra::msg::dds_::JoyData_>(topic_name, &M2EnhancementEngine::onJoyData, sink);
+      else if (type_name == "QuadLog") addSubscriber<xterra::msg::dds_::QuadLog_>(topic_name, &M2EnhancementEngine::onQuadLog, sink);
+      else if (type_name == "SolverStats") addSubscriber<xterra::msg::dds_::SolverStats_>(topic_name, &M2EnhancementEngine::onSolverStats, sink);
+      else if (type_name == "Point3D") addSubscriber<xterra::msg::dds_::Point3D_>(topic_name, &M2EnhancementEngine::onPoint3D, sink);
+      else if (type_name == "FloatScalar") addSubscriber<xterra::msg::dds_::FloatScalar_>(topic_name, &M2EnhancementEngine::onFloatScalar, sink);
+      else if (type_name == "PowerData") addSubscriber<xterra::msg::dds_::PowerData_>(topic_name, &M2EnhancementEngine::onPowerData, sink);
     }
 
     running_ = true;

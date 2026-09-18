@@ -178,14 +178,6 @@ struct Mat4
     return res;
   }
 
-  Vec3 transformPoint(const Vec3& p) const
-  {
-    return {
-      m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
-      m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
-      m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]
-    };
-  }
 };
 
 struct Triangle
@@ -197,8 +189,6 @@ struct Triangle
 struct StlMesh
 {
   std::vector<Triangle> triangles;
-  Vec3 bounds_min;
-  Vec3 bounds_max;
   bool valid = false;
 };
 
@@ -215,23 +205,13 @@ bool loadBinaryStl(const QByteArray& data, StlMesh* mesh)
 
   for (uint32_t i = 0; i < count; ++i)
   {
-    float norm[3], v1[3], v2[3], v3[3];
-    std::memcpy(norm, ptr, 12); ptr += 12;
-    std::memcpy(v1, ptr, 12); ptr += 12;
-    std::memcpy(v2, ptr, 12); ptr += 12;
-    std::memcpy(v3, ptr, 12); ptr += 12;
-    ptr += 2; // attribute byte count
+    const float* f = reinterpret_cast<const float*>(ptr);
+    Vec3 norm{f[0], f[1], f[2]}, v1{f[3], f[4], f[5]}, v2{f[6], f[7], f[8]}, v3{f[9], f[10], f[11]};
+    ptr += 50;
 
-    Triangle tri;
-    tri.a = {v1[0], v1[1], v1[2]};
-    tri.b = {v2[0], v2[1], v2[2]};
-    tri.c = {v3[0], v3[1], v3[2]};
-
-    Vec3 computed_norm = Vec3::cross(tri.b - tri.a, tri.c - tri.a).normalized();
-    tri.normal = (norm[0] != 0.0f || norm[1] != 0.0f || norm[2] != 0.0f) ?
-                 Vec3{norm[0], norm[1], norm[2]}.normalized() : computed_norm;
-
-    mesh->triangles.push_back(tri);
+    Vec3 computed = Vec3::cross(v2 - v1, v3 - v1).normalized();
+    Vec3 final_norm = (norm.x != 0.0 || norm.y != 0.0 || norm.z != 0.0) ? norm.normalized() : computed;
+    mesh->triangles.push_back({v1, v2, v3, final_norm});
   }
 
   mesh->valid = !mesh->triangles.empty();
@@ -253,7 +233,6 @@ struct JointModel
 struct LinkModel
 {
   QString name;
-  QString mesh_filename;
   StlMesh mesh;
   QColor color = QColor(140, 145, 150); // Metallic gray default
 };
@@ -300,119 +279,76 @@ public:
   {
     if (!plot_data_) return;
 
+    auto getVal = [&](const std::string& name, double& val) -> bool {
+      auto it = plot_data_->numeric.find(name);
+      if (it != plot_data_->numeric.end() && it->second.size() > 0)
+      {
+        val = it->second.back().y;
+        return true;
+      }
+      return false;
+    };
+
+    auto getSeriesVec = [&](const std::string& prefix, const char* suffixes[], double* vals, int n) -> bool {
+      for (int k = 0; k < n; ++k)
+      {
+        if (!getVal(prefix + suffixes[k], vals[k])) return false;
+      }
+      return true;
+    };
+
     // 1. Read joint angles
     std::array<double, 12> q_vals = {};
     bool has_q = false;
 
     for (int i = 0; i < 12; ++i)
     {
-      const QString idx = QString("%1").arg(i, 2, 10, QLatin1Char('0'));
-      const QString single_idx = QString::number(i);
-      const QStringList candidates = {
-        QString("rt/m2_metal/hw/sensor_data/joint/%1/q").arg(idx),
-        QString("/m2_metal/hw/sensor_data/joint/%1/q").arg(idx),
-        QString("sensor_data/joint/%1/q").arg(idx),
-        QString("/m2_metal/hw/sensor_data/q.%1").arg(single_idx),
-        QString("/m2_metal/hw/sensor_data/q.[%1]").arg(single_idx),
-        QString("sensor_data/q/%1").arg(idx),
-        QString("joints*/q/%1").arg(idx)
-      };
-
-      for (const auto& curve_name : candidates)
+      const std::string idx = formatIndex(i);
+      const std::string s_idx = std::to_string(i);
+      for (const std::string& candidate : {
+        "rt/m2_metal/hw/sensor_data/joint/" + idx + "/q",
+        "/m2_metal/hw/sensor_data/joint/" + idx + "/q",
+        "sensor_data/joint/" + idx + "/q",
+        "/m2_metal/hw/sensor_data/q." + s_idx,
+        "/m2_metal/hw/sensor_data/q.[" + s_idx + "]",
+        "sensor_data/q/" + idx,
+        "joints*/q/" + idx
+      })
       {
-        auto it = plot_data_->numeric.find(curve_name.toStdString());
-        if (it != plot_data_->numeric.end() && it->second.size() > 0)
+        if (getVal(candidate, q_vals[i]))
         {
-          q_vals[i] = it->second.back().y;
           has_q = true;
           break;
         }
       }
     }
-
-    if (has_q)
-    {
-      current_q_ = q_vals;
-    }
+    if (has_q) current_q_ = q_vals;
 
     // 2. Read IMU orientation quaternion (or RPY fallback)
     bool found_quat = false;
-    double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
+    double quat_vals[4] = {0.0, 0.0, 0.0, 1.0};
+    const char* quat_xyz[] = {"/x", "/y", "/z", "/w"};
+    const char* quat_idx[] = {"/quat.[0]", "/quat.[1]", "/quat.[2]", "/quat.[3]"};
+    const char* rpy_suffixes[] = {"/roll", "/pitch", "/yaw"};
 
-    const QStringList quat_prefixes = {
-      "rt/m2_metal/hw/sensor_data/imu/quat",
-      "/m2_metal/hw/sensor_data/imu/quat",
-      "sensor_data/imu/quat"
-    };
-
-    for (const auto& prefix : quat_prefixes)
+    for (const auto& p : {"rt/m2_metal/hw/sensor_data", "/m2_metal/hw/sensor_data", "sensor_data"})
     {
-      auto it_x = plot_data_->numeric.find((prefix + "/x").toStdString());
-      auto it_y = plot_data_->numeric.find((prefix + "/y").toStdString());
-      auto it_z = plot_data_->numeric.find((prefix + "/z").toStdString());
-      auto it_w = plot_data_->numeric.find((prefix + "/w").toStdString());
-
-      if (it_x != plot_data_->numeric.end() && it_x->second.size() > 0 &&
-          it_y != plot_data_->numeric.end() && it_y->second.size() > 0 &&
-          it_z != plot_data_->numeric.end() && it_z->second.size() > 0 &&
-          it_w != plot_data_->numeric.end() && it_w->second.size() > 0)
+      if (getSeriesVec(std::string(p) + "/imu/quat", quat_xyz, quat_vals, 4) ||
+          getSeriesVec(p, quat_idx, quat_vals, 4))
       {
-        qx = it_x->second.back().y;
-        qy = it_y->second.back().y;
-        qz = it_z->second.back().y;
-        qw = it_w->second.back().y;
         found_quat = true;
         break;
       }
     }
 
-    if (!found_quat)
-    {
-      for (const auto& base : {"rt/m2_metal/hw/sensor_data", "/m2_metal/hw/sensor_data", "sensor_data"})
-      {
-        auto it_0 = plot_data_->numeric.find(std::string(base) + "/quat.[0]");
-        auto it_1 = plot_data_->numeric.find(std::string(base) + "/quat.[1]");
-        auto it_2 = plot_data_->numeric.find(std::string(base) + "/quat.[2]");
-        auto it_3 = plot_data_->numeric.find(std::string(base) + "/quat.[3]");
-
-        if (it_0 != plot_data_->numeric.end() && it_0->second.size() > 0 &&
-            it_1 != plot_data_->numeric.end() && it_1->second.size() > 0 &&
-            it_2 != plot_data_->numeric.end() && it_2->second.size() > 0 &&
-            it_3 != plot_data_->numeric.end() && it_3->second.size() > 0)
-        {
-          qx = it_0->second.back().y;
-          qy = it_1->second.back().y;
-          qz = it_2->second.back().y;
-          qw = it_3->second.back().y;
-          found_quat = true;
-          break;
-        }
-      }
-    }
-
     bool found_rpy = false;
-    double roll = 0.0, pitch = 0.0, yaw = 0.0;
+    double rpy_vals[3] = {0.0, 0.0, 0.0};
     if (!found_quat)
     {
-      const QStringList rpy_prefixes = {
-        "rt/m2_metal/hw/sensor_data/imu/rpy",
-        "/m2_metal/hw/sensor_data/imu/rpy",
-        "sensor_data/imu/rpy"
-      };
-
-      for (const auto& prefix : rpy_prefixes)
+      for (const auto& p : {"rt/m2_metal/hw/sensor_data/imu/rpy", "/m2_metal/hw/sensor_data/imu/rpy", "sensor_data/imu/rpy"})
       {
-        auto it_r = plot_data_->numeric.find((prefix + "/roll").toStdString());
-        auto it_p = plot_data_->numeric.find((prefix + "/pitch").toStdString());
-        auto it_y = plot_data_->numeric.find((prefix + "/yaw").toStdString());
-
-        if (it_r != plot_data_->numeric.end() && it_r->second.size() > 0 &&
-            it_p != plot_data_->numeric.end() && it_p->second.size() > 0 &&
-            it_y != plot_data_->numeric.end() && it_y->second.size() > 0)
+        if (getSeriesVec(p, rpy_suffixes, rpy_vals, 3))
         {
-          roll = it_r->second.back().y;
-          pitch = it_p->second.back().y;
-          yaw = it_y->second.back().y;
           found_rpy = true;
           break;
         }
@@ -421,6 +357,7 @@ public:
 
     if (found_quat)
     {
+      double qx = quat_vals[0], qy = quat_vals[1], qz = quat_vals[2], qw = quat_vals[3];
       const double norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
       if (norm > 1e-6)
       {
@@ -442,10 +379,10 @@ public:
     else if (found_rpy)
     {
       has_orientation_ = true;
-      current_root_tf_ = Mat4::fromRpy(roll, pitch, yaw);
-      roll_deg_ = roll * 180.0 / kPi;
-      pitch_deg_ = pitch * 180.0 / kPi;
-      yaw_deg_ = yaw * 180.0 / kPi;
+      current_root_tf_ = Mat4::fromRpy(rpy_vals[0], rpy_vals[1], rpy_vals[2]);
+      roll_deg_ = rpy_vals[0] * 180.0 / kPi;
+      pitch_deg_ = rpy_vals[1] * 180.0 / kPi;
+      yaw_deg_ = rpy_vals[2] * 180.0 / kPi;
     }
 
     if (has_q || has_orientation_)
@@ -557,12 +494,7 @@ private:
   void gluPerspectiveCustom(double fovy, double aspect, double zNear, double zFar)
   {
     const double f = 1.0 / std::tan((fovy * kPi / 180.0) / 2.0);
-    GLdouble m[16] = {};
-    m[0] = f / aspect;
-    m[5] = f;
-    m[10] = (zFar + zNear) / (zNear - zFar);
-    m[11] = -1.0;
-    m[14] = (2.0 * zFar * zNear) / (zNear - zFar);
+    GLdouble m[16] = {f / aspect, 0, 0, 0,  0, f, 0, 0,  0, 0, (zFar + zNear) / (zNear - zFar), -1.0,  0, 0, (2.0 * zFar * zNear) / (zNear - zFar), 0};
     glMultMatrixd(m);
   }
 
@@ -570,16 +502,10 @@ private:
                        double centerx, double centery, double centerz,
                        double upx, double upy, double upz)
   {
-    Vec3 forward = Vec3{centerx - eyex, centery - eyey, centerz - eyez}.normalized();
-    Vec3 up = Vec3{upx, upy, upz}.normalized();
-    Vec3 side = Vec3::cross(forward, up).normalized();
-    up = Vec3::cross(side, forward);
-
-    GLdouble m[16] = {};
-    m[0] = side.x;     m[4] = side.y;     m[8]  = side.z;
-    m[1] = up.x;       m[5] = up.y;       m[9]  = up.z;
-    m[2] = -forward.x; m[6] = -forward.y; m[10] = -forward.z;
-    m[15] = 1.0;
+    Vec3 f = Vec3{centerx - eyex, centery - eyey, centerz - eyez}.normalized();
+    Vec3 s = Vec3::cross(f, Vec3{upx, upy, upz}.normalized()).normalized();
+    Vec3 u = Vec3::cross(s, f);
+    GLdouble m[16] = {s.x, u.x, -f.x, 0,  s.y, u.y, -f.y, 0,  s.z, u.z, -f.z, 0,  0, 0, 0, 1.0};
     glMultMatrixd(m);
     glTranslated(-eyex, -eyey, -eyez);
   }
@@ -700,6 +626,12 @@ private:
       motor_indices.insert(QString::fromUtf8(kJointNames[i].data(), kJointNames[i].size()), static_cast<int>(i));
     }
 
+    auto parseVec = [](const QString& s) -> Vec3 {
+      const auto parts = s.split(' ', Qt::SkipEmptyParts);
+      if (parts.size() == 3) return {parts[0].toDouble(), parts[1].toDouble(), parts[2].toDouble()};
+      return {};
+    };
+
     // Parse links and meshes
     const QDomNodeList link_nodes = doc.elementsByTagName("link");
     for (int i = 0; i < link_nodes.size(); ++i)
@@ -711,10 +643,7 @@ private:
       const QDomElement mesh_elem = elem.firstChildElement("visual").firstChildElement("geometry").firstChildElement("mesh");
       if (!mesh_elem.isNull())
       {
-        QString filename = mesh_elem.attribute("filename");
-        filename = QFileInfo(filename).fileName(); // e.g. base_link.STL
-        const QString mesh_full_path = QDir(meshes_dir).filePath(filename);
-
+        const QString mesh_full_path = QDir(meshes_dir).filePath(QFileInfo(mesh_elem.attribute("filename")).fileName());
         QFile mesh_file(mesh_full_path);
         if (mesh_file.open(QIODevice::ReadOnly))
         {
@@ -722,18 +651,9 @@ private:
         }
       }
 
-      if (link.name.contains("foot"))
-      {
-        link.color = QColor(40, 42, 45); // Dark rubber
-      }
-      else if (link.name == "base_link")
-      {
-        link.color = QColor(160, 165, 170); // Metal body
-      }
-      else
-      {
-        link.color = QColor(110, 115, 125); // Leg links
-      }
+      if (link.name.contains("foot")) link.color = QColor(40, 42, 45); // Dark rubber
+      else if (link.name == "base_link") link.color = QColor(160, 165, 170); // Metal body
+      else link.color = QColor(110, 115, 125); // Leg links
 
       links_.insert(link.name, link);
     }
@@ -751,39 +671,14 @@ private:
       const QDomElement origin_elem = elem.firstChildElement("origin");
       if (!origin_elem.isNull())
       {
-        const QString xyz_str = origin_elem.attribute("xyz");
-        const QString rpy_str = origin_elem.attribute("rpy");
-
-        auto parseVec = [](const QString& s) -> Vec3 {
-          const auto parts = s.split(' ', Qt::SkipEmptyParts);
-          if (parts.size() == 3)
-          {
-            return {parts[0].toDouble(), parts[1].toDouble(), parts[2].toDouble()};
-          }
-          return {};
-        };
-
-        joint.origin_xyz = parseVec(xyz_str);
-        joint.origin_rpy = parseVec(rpy_str);
-
+        joint.origin_xyz = parseVec(origin_elem.attribute("xyz"));
+        joint.origin_rpy = parseVec(origin_elem.attribute("rpy"));
         joint.local_origin = Mat4::translation(joint.origin_xyz) *
                              Mat4::fromRpy(joint.origin_rpy.x, joint.origin_rpy.y, joint.origin_rpy.z);
       }
 
       const QDomElement axis_elem = elem.firstChildElement("axis");
-      if (!axis_elem.isNull())
-      {
-        const auto parts = axis_elem.attribute("xyz").split(' ', Qt::SkipEmptyParts);
-        if (parts.size() == 3)
-        {
-          joint.axis = Vec3{parts[0].toDouble(), parts[1].toDouble(), parts[2].toDouble()}.normalized();
-        }
-      }
-      else
-      {
-        joint.axis = {0, 0, 1};
-      }
-
+      joint.axis = (!axis_elem.isNull()) ? parseVec(axis_elem.attribute("xyz")).normalized() : Vec3{0, 0, 1};
       joint.motor_index = motor_indices.value(joint.name, -1);
 
       children_by_parent_[joint.parent_link].push_back(joints_.size());
@@ -824,22 +719,9 @@ public:
     close_btn_->setToolTip(tr("Close 3D View and return to Plots (Esc)"));
     close_btn_->setCursor(Qt::PointingHandCursor);
     close_btn_->setStyleSheet(
-      "QPushButton { "
-      "  background-color: #3b2020; "
-      "  color: #ff8080; "
-      "  border: 1px solid #772b2b; "
-      "  border-radius: 4px; "
-      "  padding: 4px 12px; "
-      "  font-weight: bold; "
-      "} "
-      "QPushButton:hover { "
-      "  background-color: #5b2828; "
-      "  color: #ffffff; "
-      "  border-color: #aa3b3b; "
-      "} "
-      "QPushButton:pressed { "
-      "  background-color: #772b2b; "
-      "}");
+      "QPushButton { background: #3b2020; color: #ff8080; border: 1px solid #772b2b; border-radius: 4px; padding: 4px 12px; font-weight: bold; } "
+      "QPushButton:hover { background: #5b2828; color: #ffffff; border-color: #aa3b3b; } "
+      "QPushButton:pressed { background: #772b2b; }");
     toolbar->addWidget(close_btn_);
 
     main_layout->addLayout(toolbar);
