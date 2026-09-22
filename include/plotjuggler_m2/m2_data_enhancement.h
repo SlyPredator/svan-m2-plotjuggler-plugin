@@ -24,6 +24,7 @@ using SampleSink = std::function<void(const std::string& name, double stamp, dou
 
 struct EnhancementOptions
 {
+  bool enhanced_mode = false;
   bool pd_torque_enabled = true;
   bool joint_power_enabled = true;
   bool tracking_error_enabled = true;
@@ -108,8 +109,7 @@ private:
   std::optional<StampedJointData> latest_cmd_;
   std::optional<StampedSensorData> latest_sensor_;
 
-  void emitDesiredAndErrorMetrics(const std::string& topic_prefix,
-                                  const xterra::msg::dds_::JointData_& cmd,
+  void emitDesiredAndErrorMetrics(const xterra::msg::dds_::JointData_& cmd,
                                   const xterra::msg::dds_::SensorData_& sensor,
                                   double stamp,
                                   const SampleSink& sink);

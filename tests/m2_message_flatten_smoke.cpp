@@ -16,6 +16,7 @@ int main()
   };
 
   EnhancementOptions opts;
+  opts.enhanced_mode = true;
   opts.pd_torque_enabled = true;
   opts.joint_power_enabled = true;
   opts.tracking_error_enabled = true;
@@ -189,6 +190,53 @@ int main()
   assert(captured_samples.count("power_data/power_calc") == 1);
   assert(std::abs(captured_samples["power_data/power_calc"] - 120.0) < 1e-4);
   std::cout << "SUCCESS: All PowerData tests passed!" << std::endl;
+
+  // 9. Test Default / Canonical Mode (enhanced_mode = false)
+  captured_samples.clear();
+  EnhancementOptions canonical_opts;
+  canonical_opts.enhanced_mode = false;
+  M2EnhancementEngine canonical_engine(canonical_opts);
+
+  canonical_engine.onSensorData("rt/m2_metal/hw/sensor_data", sensor_msg, 2.0, sink);
+  canonical_engine.onJointData("rt/m2_metal/hw/joint_command", cmd_msg, 2.01, sink);
+  canonical_engine.onJoyData("rt/joystick_data", joy_msg, 2.02, sink);
+  canonical_engine.onPoint3D("rt/m2_metal/hw/base_err", pt_msg, 2.03, sink);
+  canonical_engine.onPowerData("rt/m2_metal/hw/power_data", pwr_msg, 2.04, sink);
+
+  // Must have canonical raw IDL paths
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/q/0") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/q/11") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/tau_est/0") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/driver_power/11") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/quat/3") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/gyro/2") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/accel/2") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/sensor_data/rpy/2") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/joint_command/q/0") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/joint_command/tau/11") == 1);
+  assert(captured_samples.count("rt/joystick_data/priority") == 1);
+  assert(captured_samples.count("rt/joystick_data/axes/0") == 1);
+  assert(captured_samples.count("rt/joystick_data/buttons/0") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/base_err/x") == 1);
+  assert(captured_samples.count("rt/m2_metal/hw/power_data/voltage") == 1);
+
+  // Must NOT have any enhanced, derived, summary, or alias curves
+  for (const auto& [name, _] : captured_samples)
+  {
+    assert(name.rfind("enhanced", 0) != 0 && "Found enhanced topic in canonical mode!");
+    assert(name.find("/summary/") == std::string::npos && "Found summary topic in canonical mode!");
+    assert(name.find("/joint/") == std::string::npos && "Found joint/00 topic in canonical mode!");
+    assert(name.rfind("legs/", 0) != 0 && "Found legs/ alias in canonical mode!");
+    assert(name.rfind("joints*/", 0) != 0 && "Found joints*/ alias in canonical mode!");
+    assert(name.rfind("joint_targets*/", 0) != 0 && "Found joint_targets*/ alias in canonical mode!");
+    assert(name.rfind("tracking_error*/", 0) != 0 && "Found tracking_error*/ in canonical mode!");
+    assert(name.rfind("tau_des*/", 0) != 0 && "Found tau_des*/ in canonical mode!");
+    assert(name.find("power_mech") == std::string::npos && "Found power_mech in canonical mode!");
+    assert(name.find("power_calc") == std::string::npos && "Found power_calc in canonical mode!");
+    assert(name.find("/norm") == std::string::npos && "Found /norm in canonical mode!");
+  }
+  std::cout << "SUCCESS: All Canonical Mode verification tests passed! Total canonical curves: "
+            << captured_samples.size() << std::endl;
 
   return 0;
 }

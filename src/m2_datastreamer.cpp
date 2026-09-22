@@ -17,6 +17,8 @@
 #include <QVBoxLayout>
 
 #include <iostream>
+#include <cstring>
+#include <cstdlib>
 
 namespace plotjuggler_m2
 {
@@ -143,9 +145,18 @@ void M2DataStreamer::loadDefaultSettings()
   config_.network_interface = settings.value("network_interface", "").toString().toStdString();
   config_.clear_existing_data = settings.value("clear_existing_data", true).toBool();
 
+  // If not launched with --enhanced, use the canonical raw IDL scheme (all enhancements OFF).
+  // When launched with --enhanced, honour the per-toggle QSettings values (default all ON).
+  const bool enhanced_mode = []() -> bool {
+    const char* env = std::getenv("PLOTJUGGLER_M2_ENHANCED");
+    return env && std::strcmp(env, "1") == 0;
+  }();
+
+  config_.enhancements.enhanced_mode = enhanced_mode;
+
   for (const auto& f : kEnhanceFields)
   {
-    config_.enhancements.*(f.member) = settings.value(f.settings_name, true).toBool();
+    config_.enhancements.*(f.member) = enhanced_mode && settings.value(f.settings_name, true).toBool();
   }
 
   config_.topics = {
@@ -169,6 +180,9 @@ void M2DataStreamer::loadDefaultSettings()
     config_.topics.push_back({std::string("rt/m2_metal/hw/") + t.name, t.type, true});
   }
 
+  config_.topics.push_back({"/m2_metal/playback_active", "FloatScalar", true});
+  config_.topics.push_back({"rt/m2_metal/playback_active", "FloatScalar", true});
+
   enhancer_.setOptions(config_.enhancements);
 }
 
@@ -179,6 +193,7 @@ void M2DataStreamer::saveDefaultSettings() const
   settings.setValue("domain_id", config_.domain_id);
   settings.setValue("network_interface", QString::fromStdString(config_.network_interface));
   settings.setValue("clear_existing_data", config_.clear_existing_data);
+  settings.setValue("enhanced_mode", config_.enhancements.enhanced_mode);
 
   for (const auto& f : kEnhanceFields)
   {
@@ -246,10 +261,14 @@ void M2DataStreamer::showSettingsDialog()
     config_.network_interface = iface_combo->currentData().toString().toStdString();
     config_.clear_existing_data = clear_chk->isChecked();
 
+    bool any_checked = false;
     for (std::size_t i = 0; i < check_boxes.size(); ++i)
     {
-      config_.enhancements.*(kEnhanceFields[i].member) = check_boxes[i]->isChecked();
+      const bool checked = check_boxes[i]->isChecked();
+      config_.enhancements.*(kEnhanceFields[i].member) = checked;
+      if (checked) any_checked = true;
     }
+    config_.enhancements.enhanced_mode = any_checked;
 
     enhancer_.setOptions(config_.enhancements);
     saveDefaultSettings();
@@ -262,6 +281,7 @@ bool M2DataStreamer::xmlSaveState(QDomDocument& doc, QDomElement& parent_element
   elem.setAttribute("domain_id", config_.domain_id);
   elem.setAttribute("network_interface", QString::fromStdString(config_.network_interface));
   elem.setAttribute("clear_existing_data", config_.clear_existing_data ? "true" : "false");
+  elem.setAttribute("enhanced_mode", config_.enhancements.enhanced_mode ? "true" : "false");
   for (const auto& f : kEnhanceFields)
   {
     elem.setAttribute(f.xml_name, (config_.enhancements.*(f.member)) ? "true" : "false");
@@ -278,6 +298,7 @@ bool M2DataStreamer::xmlLoadState(const QDomElement& parent_element)
     config_.domain_id = elem.attribute("domain_id", "0").toInt();
     config_.network_interface = elem.attribute("network_interface", "").toStdString();
     config_.clear_existing_data = (elem.attribute("clear_existing_data", "true") == "true");
+    config_.enhancements.enhanced_mode = (elem.attribute("enhanced_mode", "false") == "true");
 
     for (const auto& f : kEnhanceFields)
     {

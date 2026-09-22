@@ -3,4 +3,4 @@
 	url = https://github.com/xterra-robotics/xterra_m2
 [submodule "third_party/m2_sdk"]
 	path = third_party/m2_sdk
-	url = https://github.com/xterra-robotics/m2_sdk.git
+	url = https://github.com/SlyPredator/m2_sdk.git

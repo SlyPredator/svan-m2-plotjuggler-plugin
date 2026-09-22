@@ -20,7 +20,7 @@ if [[ ! -d "third_party/m2_sdk/third_party/install" ]]; then
 fi
 
 # 3. Build PlotJuggler binary & dev SDK into .deps/plotjuggler if not already present
-if [[ ! -f ".deps/plotjuggler/lib/plotjuggler/plotjuggler" ]]; then
+if [[ ! -f ".deps/plotjuggler/bin/plotjuggler" && ! -f ".deps/plotjuggler/lib/plotjuggler/plotjuggler" ]]; then
   echo "PlotJuggler not found in .deps/plotjuggler. Building PlotJuggler..."
   "${script_dir}/build_plotjuggler_dev.sh"
 fi

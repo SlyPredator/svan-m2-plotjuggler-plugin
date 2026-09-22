@@ -95,10 +95,11 @@ int main()
 
   {
     std::lock_guard<std::mutex> lock(mutex);
-    assert(captured.count("rt/m2_metal/hw/sensor_data/joint/00/q") == 1);
-    assert(std::abs(captured["rt/m2_metal/hw/sensor_data/joint/00/q"] - 0.42) < 1e-5);
-    std::cout << "Captured live sample from DDS: q[0] = "
-              << captured["rt/m2_metal/hw/sensor_data/joint/00/q"] << " rad." << std::endl;
+    assert(captured.count("rt/m2_metal/hw/sensor_data/q/0") == 1);
+    assert(std::abs(captured["rt/m2_metal/hw/sensor_data/q/0"] - 0.42) < 1e-5);
+    assert(captured.count("rt/m2_metal/hw/sensor_data/joint/00/q") == 0);
+    std::cout << "Captured live sample from DDS: q/0 = "
+              << captured["rt/m2_metal/hw/sensor_data/q/0"] << " rad." << std::endl;
   }
 
   std::cout << "SUCCESS: Full CycloneDDS live network loopback test passed!" << std::endl;

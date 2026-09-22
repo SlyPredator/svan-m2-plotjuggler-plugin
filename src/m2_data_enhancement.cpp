@@ -78,6 +78,25 @@ void M2EnhancementEngine::onSensorData(const std::string& topic_prefix,
 
   const std::string prefix = topic_prefix.empty() ? "sensor_data" : topic_prefix;
 
+  if (!options_.enhanced_mode)
+  {
+    sinkIndexed(sink, prefix + "/driver_fault", stamp, msg.driver_fault(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/driver_voltage", stamp, msg.driver_voltage(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/driver_power", stamp, msg.driver_power(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/fet_temp", stamp, msg.fet_temp(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/motor_temp", stamp, msg.motor_temp(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/q", stamp, msg.q(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/dq", stamp, msg.dq(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/q_current", stamp, msg.q_current(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/ddq", stamp, msg.ddq(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/tau_est", stamp, msg.tau_est(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/quat", stamp, msg.quat(), 4);
+    sinkIndexed(sink, prefix + "/gyro", stamp, msg.gyro(), 3);
+    sinkIndexed(sink, prefix + "/accel", stamp, msg.accel(), 3);
+    sinkIndexed(sink, prefix + "/rpy", stamp, msg.rpy(), 3);
+    return;
+  }
+
   double total_elec_power = 0.0;
   double total_mech_power_est = 0.0;
 
@@ -146,7 +165,7 @@ void M2EnhancementEngine::onSensorData(const std::string& topic_prefix,
 
   if (latest_cmd_.has_value() && std::abs(stamp - latest_cmd_->stamp) <= kMaxPairingAgeSec)
   {
-    emitDesiredAndErrorMetrics(prefix, latest_cmd_->msg, msg, stamp, sink);
+    emitDesiredAndErrorMetrics(latest_cmd_->msg, msg, stamp, sink);
   }
 }
 
@@ -159,6 +178,16 @@ void M2EnhancementEngine::onJointData(const std::string& topic_prefix,
   latest_cmd_ = StampedJointData{msg, stamp};
 
   const std::string prefix = topic_prefix.empty() ? "joint_command" : topic_prefix;
+
+  if (!options_.enhanced_mode)
+  {
+    sinkIndexed(sink, prefix + "/q", stamp, msg.q(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/dq", stamp, msg.dq(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/kp", stamp, msg.kp(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/kd", stamp, msg.kd(), kM2JointCount);
+    sinkIndexed(sink, prefix + "/tau", stamp, msg.tau(), kM2JointCount);
+    return;
+  }
 
   for (std::size_t i = 0; i < kM2JointCount; ++i)
   {
@@ -183,7 +212,7 @@ void M2EnhancementEngine::onJointData(const std::string& topic_prefix,
 
   if (latest_sensor_.has_value() && std::abs(stamp - latest_sensor_->stamp) <= kMaxPairingAgeSec)
   {
-    emitDesiredAndErrorMetrics(prefix, msg, latest_sensor_->msg, stamp, sink);
+    emitDesiredAndErrorMetrics(msg, latest_sensor_->msg, stamp, sink);
   }
 }
 
@@ -193,6 +222,14 @@ void M2EnhancementEngine::onJoyData(const std::string& topic_prefix,
                                    const SampleSink& sink)
 {
   const std::string prefix = topic_prefix.empty() ? "joystick" : topic_prefix;
+
+  if (!options_.enhanced_mode)
+  {
+    sink(prefix + "/priority", stamp, static_cast<double>(msg.priority()));
+    sinkIndexed(sink, prefix + "/axes", stamp, msg.axes(), kM2AxesCount);
+    sinkIndexed(sink, prefix + "/buttons", stamp, msg.buttons(), kM2ButtonCount);
+    return;
+  }
 
   sink(prefix + "/priority", stamp, static_cast<double>(msg.priority()));
 
@@ -211,12 +248,16 @@ void M2EnhancementEngine::onJoyData(const std::string& topic_prefix,
   }
 }
 
-void M2EnhancementEngine::emitDesiredAndErrorMetrics(const std::string& /*topic_prefix*/,
-                                                     const xterra::msg::dds_::JointData_& cmd,
+void M2EnhancementEngine::emitDesiredAndErrorMetrics(const xterra::msg::dds_::JointData_& cmd,
                                                      const xterra::msg::dds_::SensorData_& sensor,
                                                      double stamp,
                                                      const SampleSink& sink)
 {
+  if (!options_.enhanced_mode)
+  {
+    return;
+  }
+
   double total_p_mech_des = 0.0;
 
   for (std::size_t i = 0; i < kM2JointCount; ++i)
@@ -261,7 +302,10 @@ void M2EnhancementEngine::emitDesiredAndErrorMetrics(const std::string& /*topic_
     }
   }
 
-  sink("enhanced/summary/total_mechanical_power_des", stamp, total_p_mech_des);
+  if (options_.joint_power_enabled)
+  {
+    sink("enhanced/summary/total_mechanical_power_des", stamp, total_p_mech_des);
+  }
 }
 
 void M2EnhancementEngine::onQuadLog(const std::string& topic_prefix,
@@ -317,7 +361,10 @@ void M2EnhancementEngine::onPoint3D(const std::string& topic_prefix,
 {
   const std::string prefix = topic_prefix.empty() ? "point3d" : topic_prefix;
   sinkVec3(sink, prefix, stamp, msg);
-  sink(prefix + "/norm", stamp, std::sqrt(msg.x() * msg.x() + msg.y() * msg.y() + msg.z() * msg.z()));
+  if (options_.enhanced_mode)
+  {
+    sink(prefix + "/norm", stamp, std::sqrt(msg.x() * msg.x() + msg.y() * msg.y() + msg.z() * msg.z()));
+  }
 }
 
 void M2EnhancementEngine::onFloatScalar(const std::string& topic_prefix,
@@ -348,14 +395,13 @@ void M2EnhancementEngine::onPowerData(const std::string& topic_prefix,
                                      const SampleSink& sink)
 {
   const std::string prefix = topic_prefix.empty() ? "power" : topic_prefix;
-  struct Field { const char* name; double val; };
-  for (const auto& f : {Field{"/voltage", static_cast<double>(msg.voltage())},
-                        Field{"/current", static_cast<double>(msg.current())},
-                        Field{"/temperature", static_cast<double>(msg.temperature())},
-                        Field{"/energy", static_cast<double>(msg.energy())},
-                        Field{"/power_calc", static_cast<double>(msg.voltage() * msg.current())}})
+  sink(prefix + "/voltage", stamp, static_cast<double>(msg.voltage()));
+  sink(prefix + "/current", stamp, static_cast<double>(msg.current()));
+  sink(prefix + "/temperature", stamp, static_cast<double>(msg.temperature()));
+  sink(prefix + "/energy", stamp, static_cast<double>(msg.energy()));
+  if (options_.enhanced_mode)
   {
-    sink(prefix + f.name, stamp, f.val);
+    sink(prefix + "/power_calc", stamp, static_cast<double>(msg.voltage() * msg.current()));
   }
 }
 

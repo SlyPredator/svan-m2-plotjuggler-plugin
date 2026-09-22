@@ -12,10 +12,7 @@
 #include <vector>
 
 #include <QAction>
-#include <QDialog>
 #include <QObject>
-
-class QEvent;
 
 namespace plotjuggler_m2
 {

@@ -101,6 +101,13 @@ inline void decodeJointCmd(const uint8_t* raw, xterra::msg::dds_::JointData_& cm
   readFloats(cmd.tau(), f, 12);
 }
 
+template <typename V>
+inline void readVec3(V& dst, const float*& src)
+{
+  dst.x(src[0]); dst.y(src[1]); dst.z(src[2]);
+  src += 3;
+}
+
 inline void decodeQuadLog(const uint8_t* raw, xterra::msg::dds_::QuadLog_& quad)
 {
   const float* f = reinterpret_cast<const float*>(raw + 4);
@@ -108,12 +115,12 @@ inline void decodeQuadLog(const uint8_t* raw, xterra::msg::dds_::QuadLog_& quad)
   readFloats(quad.contact_prob(), f, 4);
   readFloats(quad.contact_force(), f, 12);
 
-  quad.base_position().x(f[0]); quad.base_position().y(f[1]); quad.base_position().z(f[2]); f += 3;
+  readVec3(quad.base_position(), f);
   quad.base_orientation().x(f[0]); quad.base_orientation().y(f[1]);
   quad.base_orientation().z(f[2]); quad.base_orientation().w(f[3]); f += 4;
-  quad.linear_velocity().x(f[0]); quad.linear_velocity().y(f[1]); quad.linear_velocity().z(f[2]); f += 3;
-  quad.angular_velocity().x(f[0]); quad.angular_velocity().y(f[1]); quad.angular_velocity().z(f[2]); f += 3;
-  quad.plane_normal().x(f[0]); quad.plane_normal().y(f[1]); quad.plane_normal().z(f[2]); f += 3;
+  readVec3(quad.linear_velocity(), f);
+  readVec3(quad.angular_velocity(), f);
+  readVec3(quad.plane_normal(), f);
 
   readFloats(quad.base_wrench(), f, 6);
   readFloats(quad.joint_position(), f, 12);
@@ -209,9 +216,14 @@ int main(int argc, char* argv[])
     auto base_err_writer = makeWriter<xterra::msg::dds_::Point3D_>(participant, pub, "rt/m2_metal/hw/base_err");
     auto mpc_time_writer = makeWriter<xterra::msg::dds_::FloatScalar_>(participant, pub, "rt/m2_metal/hw/mpc_time");
     auto power_writer = makeWriter<xterra::msg::dds_::PowerData_>(participant, pub, "rt/m2_metal/hw/power_data");
+    auto playback_active_writer = makeWriter<xterra::msg::dds_::FloatScalar_>(participant, pub, "rt/m2_metal/playback_active");
 
     // Wait briefly for DDS endpoint announcement
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    xterra::msg::dds_::FloatScalar_ active_msg;
+    active_msg.data(1.0f);
+    playback_active_writer.write(active_msg);
 
     uint64_t loop_count = 0;
 
@@ -274,8 +286,18 @@ int main(int argc, char* argv[])
           start_sim_time_ns = log_time_ns;
           start_real_time = std::chrono::steady_clock::now();
           first_msg = false;
+          playback_active_writer.write(active_msg);
         }
-        else if (playback_rate > 0.0)
+        else
+        {
+          static auto last_heartbeat = std::chrono::steady_clock::now();
+          if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - last_heartbeat).count() >= 1)
+          {
+            last_heartbeat = std::chrono::steady_clock::now();
+            playback_active_writer.write(active_msg);
+          }
+        }
+        if (playback_rate > 0.0)
         {
           const uint64_t elapsed_sim_ns = log_time_ns - start_sim_time_ns;
           const double target_elapsed_sec = (static_cast<double>(elapsed_sim_ns) * 1e-9) / playback_rate;
@@ -308,10 +330,8 @@ int main(int argc, char* argv[])
           case MsgKind::Joy: {
             xterra::msg::dds_::JoyData_ joy;
             joy.priority(raw[4]);
-            const float* axes = reinterpret_cast<const float*>(raw + 8);
-            for (std::size_t a = 0; a < 6; ++a) joy.axes()[a] = axes[a];
-            const uint8_t* btns = raw + 32;
-            for (std::size_t b = 0; b < 12; ++b) joy.buttons()[b] = btns[b];
+            std::memcpy(joy.axes().data(), raw + 8, 6 * sizeof(float));
+            std::memcpy(joy.buttons().data(), raw + 32, 12);
             joy_writer.write(joy);
             count_joy++;
             break;
