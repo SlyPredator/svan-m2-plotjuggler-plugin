@@ -17,6 +17,7 @@
 #include <QVBoxLayout>
 
 #include <iostream>
+#include <sstream>
 #include <cstring>
 #include <cstdlib>
 
@@ -32,9 +33,9 @@ class DdsListenerImpl : public ISubListener, public dds::sub::NoOpDataReaderList
 public:
   using Callback = std::function<void(const T&)>;
 
-  DdsListenerImpl(int domain_id, const std::string& topic_name, Callback cb)
+  DdsListenerImpl(dds::domain::DomainParticipant participant, const std::string& topic_name, Callback cb)
     : callback_(std::move(cb)),
-      participant_(domain_id),
+      participant_(participant),
       topic_(participant_, topic_name),
       subscriber_(participant_),
       reader_(dds::core::null)
@@ -103,13 +104,58 @@ constexpr EnhanceField kEnhanceFields[] = {
   {"metric_first", "metric_first_aliases_enabled", "Generate 1-Drag Multi-Curve Aliases (joints*/q/00)", &EnhancementOptions::metric_first_aliases_enabled}
 };
 
+std::string buildCycloneConfig(const std::string& iface_name)
+{
+  std::ostringstream oss;
+  oss << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+  oss << "<CycloneDDS>\n";
+  oss << "  <Domain Id=\"any\">\n";
+  oss << "    <General>\n";
+  oss << "      <Interfaces>\n";
+  if (!iface_name.empty())
+  {
+    oss << "        <NetworkInterface name=\"" << iface_name << "\" multicast=\"true\"/>\n";
+  }
+  else
+  {
+    bool has_any = false;
+    for (const auto& iface : QNetworkInterface::allInterfaces())
+    {
+      if (iface.flags().testFlag(QNetworkInterface::IsUp) &&
+          !iface.flags().testFlag(QNetworkInterface::IsLoopBack))
+      {
+        oss << "        <NetworkInterface name=\"" << iface.name().toStdString() << "\" multicast=\"true\"/>\n";
+        has_any = true;
+      }
+    }
+    if (!has_any)
+    {
+      oss << "        <NetworkInterface name=\"auto\" multicast=\"true\"/>\n";
+    }
+  }
+  oss << "      </Interfaces>\n";
+  oss << "      <AllowMulticast>default</AllowMulticast>\n";
+  oss << "    </General>\n";
+  oss << "    <Discovery>\n";
+  oss << "      <Peers>\n";
+  oss << "        <Peer address=\"192.168.123.3\"/>\n";
+  oss << "        <Peer address=\"192.168.123.10\"/>\n";
+  oss << "        <Peer address=\"localhost\"/>\n";
+  oss << "      </Peers>\n";
+  oss << "    </Discovery>\n";
+  oss << "  </Domain>\n";
+  oss << "</CycloneDDS>\n";
+  return oss.str();
+}
+
 } // namespace
 
 template <typename T, typename Method>
-void M2DataStreamer::addSubscriber(const std::string& topic_name, Method method, const SampleSink& sink)
+void M2DataStreamer::addSubscriber(dds::domain::DomainParticipant& participant,
+                                   const std::string& topic_name, Method method, const SampleSink& sink)
 {
   subscribers_.push_back(std::make_unique<DdsListenerImpl<T>>(
-      config_.domain_id, topic_name,
+      participant, topic_name,
       [this, sink, topic_name, method](const T& msg) {
         std::lock_guard<std::mutex> callback_lock(callback_mutex_);
         if (!running_) return;
@@ -145,6 +191,27 @@ void M2DataStreamer::loadDefaultSettings()
   config_.network_interface = settings.value("network_interface", "").toString().toStdString();
   config_.clear_existing_data = settings.value("clear_existing_data", true).toBool();
 
+  // Auto-detect interface on the robot subnet (192.168.123.*) if none was explicitly configured
+  if (config_.network_interface.empty())
+  {
+    for (const auto& iface : QNetworkInterface::allInterfaces())
+    {
+      if (iface.flags().testFlag(QNetworkInterface::IsUp) &&
+          !iface.flags().testFlag(QNetworkInterface::IsLoopBack))
+      {
+        for (const auto& entry : iface.addressEntries())
+        {
+          if (entry.ip().toString().startsWith("192.168.123."))
+          {
+            config_.network_interface = iface.name().toStdString();
+            break;
+          }
+        }
+      }
+      if (!config_.network_interface.empty()) break;
+    }
+  }
+
   // If not launched with --enhanced, use the canonical raw IDL scheme (all enhancements OFF).
   // When launched with --enhanced, honour the per-toggle QSettings values (default all ON).
   const bool enhanced_mode = []() -> bool {
@@ -165,7 +232,11 @@ void M2DataStreamer::loadDefaultSettings()
     {std::string(kRosJointCommandTopic), "JointData", true},
     {std::string(kDdsJointCommandTopic), "JointData", true},
     {std::string(kRosJoystickTopic), "JoyData", true},
-    {std::string(kDdsJoystickTopic), "JoyData", true}
+    {std::string(kDdsJoystickTopic), "JoyData", true},
+    {"/joystick_data", "JoyData", true},
+    {"rt/joystick_data", "JoyData", true},
+    {"/bt_usb/joystick_data", "JoyData", true},
+    {"rt/bt_usb/joystick_data", "JoyData", true}
   };
 
   struct NamedType { const char* name; const char* type; };
@@ -221,7 +292,21 @@ void M2DataStreamer::showSettingsDialog()
     if (iface.flags().testFlag(QNetworkInterface::IsUp) &&
         !iface.flags().testFlag(QNetworkInterface::IsLoopBack))
     {
-      iface_combo->addItem(iface.humanReadableName(), iface.name());
+      QString ip_str;
+      for (const auto& entry : iface.addressEntries())
+      {
+        if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol)
+        {
+          ip_str = entry.ip().toString();
+          break;
+        }
+      }
+      QString label = iface.name();
+      if (!ip_str.isEmpty())
+      {
+        label += QString(" [%1]").arg(ip_str);
+      }
+      iface_combo->addItem(label, iface.name());
     }
   }
   const int iface_idx = iface_combo->findData(QString::fromStdString(config_.network_interface));
@@ -298,11 +383,23 @@ bool M2DataStreamer::xmlLoadState(const QDomElement& parent_element)
     config_.domain_id = elem.attribute("domain_id", "0").toInt();
     config_.network_interface = elem.attribute("network_interface", "").toStdString();
     config_.clear_existing_data = (elem.attribute("clear_existing_data", "true") == "true");
-    config_.enhancements.enhanced_mode = (elem.attribute("enhanced_mode", "false") == "true");
-
-    for (const auto& f : kEnhanceFields)
+    const char* env_enhanced = std::getenv("PLOTJUGGLER_M2_ENHANCED");
+    if (env_enhanced)
     {
-      config_.enhancements.*(f.member) = (elem.attribute(f.xml_name, "true") == "true");
+      const bool env_on = (std::strcmp(env_enhanced, "1") == 0);
+      config_.enhancements.enhanced_mode = env_on;
+      for (const auto& f : kEnhanceFields)
+      {
+        config_.enhancements.*(f.member) = env_on;
+      }
+    }
+    else
+    {
+      config_.enhancements.enhanced_mode = (elem.attribute("enhanced_mode", "false") == "true");
+      for (const auto& f : kEnhanceFields)
+      {
+        config_.enhancements.*(f.member) = (elem.attribute(f.xml_name, "true") == "true");
+      }
     }
 
     enhancer_.setOptions(config_.enhancements);
@@ -324,6 +421,17 @@ void M2DataStreamer::appendSampleUnlocked(const std::string& series_name, double
 void M2DataStreamer::clearState()
 {
   subscribers_.clear();
+  try
+  {
+    if (participant_ != dds::core::null)
+    {
+      participant_.close();
+      participant_ = dds::domain::DomainParticipant(dds::core::null);
+    }
+  }
+  catch (...)
+  {
+  }
   enhancer_.reset();
 }
 
@@ -351,22 +459,44 @@ bool M2DataStreamer::start(QStringList* /*selected_datasources*/)
     appendSampleUnlocked(name, stamp, value);
   };
 
+  const char* env_enhanced = std::getenv("PLOTJUGGLER_M2_ENHANCED");
+  if (env_enhanced)
+  {
+    const bool env_on = (std::strcmp(env_enhanced, "1") == 0);
+    config_.enhancements.enhanced_mode = env_on;
+    for (const auto& f : kEnhanceFields)
+    {
+      config_.enhancements.*(f.member) = env_on;
+    }
+  }
+  enhancer_.setOptions(config_.enhancements);
+
   try
   {
+    const std::string config_xml = buildCycloneConfig(config_.network_interface);
+    ::setenv("CYCLONEDDS_URI", config_xml.c_str(), 1);
+
+    participant_ = dds::domain::DomainParticipant(
+        config_.domain_id,
+        dds::domain::qos::DomainParticipantQos(),
+        nullptr,
+        dds::core::status::StatusMask::none(),
+        config_xml);
+
     for (const auto& topic_cfg : config_.topics)
     {
       if (!topic_cfg.enabled) continue;
       const std::string& topic_name = topic_cfg.name;
       const std::string& type_name = topic_cfg.type_name;
 
-      if (type_name == "SensorData") addSubscriber<xterra::msg::dds_::SensorData_>(topic_name, &M2EnhancementEngine::onSensorData, sink);
-      else if (type_name == "JointData") addSubscriber<xterra::msg::dds_::JointData_>(topic_name, &M2EnhancementEngine::onJointData, sink);
-      else if (type_name == "JoyData") addSubscriber<xterra::msg::dds_::JoyData_>(topic_name, &M2EnhancementEngine::onJoyData, sink);
-      else if (type_name == "QuadLog") addSubscriber<xterra::msg::dds_::QuadLog_>(topic_name, &M2EnhancementEngine::onQuadLog, sink);
-      else if (type_name == "SolverStats") addSubscriber<xterra::msg::dds_::SolverStats_>(topic_name, &M2EnhancementEngine::onSolverStats, sink);
-      else if (type_name == "Point3D") addSubscriber<xterra::msg::dds_::Point3D_>(topic_name, &M2EnhancementEngine::onPoint3D, sink);
-      else if (type_name == "FloatScalar") addSubscriber<xterra::msg::dds_::FloatScalar_>(topic_name, &M2EnhancementEngine::onFloatScalar, sink);
-      else if (type_name == "PowerData") addSubscriber<xterra::msg::dds_::PowerData_>(topic_name, &M2EnhancementEngine::onPowerData, sink);
+      if (type_name == "SensorData") addSubscriber<xterra::msg::dds_::SensorData_>(participant_, topic_name, &M2EnhancementEngine::onSensorData, sink);
+      else if (type_name == "JointData") addSubscriber<xterra::msg::dds_::JointData_>(participant_, topic_name, &M2EnhancementEngine::onJointData, sink);
+      else if (type_name == "JoyData") addSubscriber<xterra::msg::dds_::JoyData_>(participant_, topic_name, &M2EnhancementEngine::onJoyData, sink);
+      else if (type_name == "QuadLog") addSubscriber<xterra::msg::dds_::QuadLog_>(participant_, topic_name, &M2EnhancementEngine::onQuadLog, sink);
+      else if (type_name == "SolverStats") addSubscriber<xterra::msg::dds_::SolverStats_>(participant_, topic_name, &M2EnhancementEngine::onSolverStats, sink);
+      else if (type_name == "Point3D") addSubscriber<xterra::msg::dds_::Point3D_>(participant_, topic_name, &M2EnhancementEngine::onPoint3D, sink);
+      else if (type_name == "FloatScalar") addSubscriber<xterra::msg::dds_::FloatScalar_>(participant_, topic_name, &M2EnhancementEngine::onFloatScalar, sink);
+      else if (type_name == "PowerData") addSubscriber<xterra::msg::dds_::PowerData_>(participant_, topic_name, &M2EnhancementEngine::onPowerData, sink);
     }
 
     running_ = true;

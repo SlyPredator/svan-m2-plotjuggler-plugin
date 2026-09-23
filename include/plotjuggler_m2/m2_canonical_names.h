@@ -80,11 +80,6 @@ inline std::string formatIndex(std::size_t index)
   return (index < 10 ? "0" : "") + std::to_string(index);
 }
 
-inline int jointNameToIndex(std::string_view name)
-{
-  auto it = std::find(kJointNames.begin(), kJointNames.end(), name);
-  return it != kJointNames.end() ? static_cast<int>(std::distance(kJointNames.begin(), it)) : -1;
-}
 
 inline std::string legJointAlias(std::size_t index, std::string_view field)
 {

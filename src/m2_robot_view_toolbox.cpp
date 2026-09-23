@@ -303,7 +303,11 @@ public:
 
     auto* repaint_timer = new QTimer(this);
     connect(repaint_timer, &QTimer::timeout, this, [this]() {
-      if (isVisible()) update();
+      if (isVisible())
+      {
+        updatePoseFromPlotData();
+        update();
+      }
     });
     repaint_timer->start(33);
   }
@@ -327,7 +331,6 @@ public:
   void setUseImu(bool val) { use_imu_ = val; update(); }
   bool useImu() const { return use_imu_; }
   void setDrawMesh(bool val) { draw_mesh_ = val; update(); }
-  bool drawMesh() const { return draw_mesh_; }
   void setLiveMode(bool val) { live_mode_ = val; update(); }
   bool liveMode() const { return live_mode_; }
   void setSelectedTime(double t) { selected_time_ = t; update(); }
@@ -436,15 +439,25 @@ public:
         case 5: return "sensor_data/q/" + s_idx;
         case 6: return "rt/m2_metal/hw/sensor_data/q/" + idx;
         case 7: return "/m2_metal/hw/sensor_data/q/" + idx;
-        case 8: return "/m2_metal/hw/sensor_data/q." + s_idx;
-        case 9: return "/m2_metal/hw/sensor_data/q.[" + s_idx + "]";
-        case 10: return "sensor_data/q/" + idx;
-        case 11: return "joints*/q/" + idx;
+        case 8: return "sensor_data/q/" + idx;
+        case 9: return "joints*/q/" + idx;
+        case 10: return "rt/m2_metal/hw/joint_command/joint/" + idx + "/q";
+        case 11: return "/m2_metal/hw/joint_command/joint/" + idx + "/q";
+        case 12: return "joint_command/joint/" + idx + "/q";
+        case 13: return "rt/m2_metal/hw/joint_command/q/" + s_idx;
+        case 14: return "/m2_metal/hw/joint_command/q/" + s_idx;
+        case 15: return "joint_command/q/" + s_idx;
+        case 16: return "rt/m2_metal/hw/joint_command/q/" + idx;
+        case 17: return "/m2_metal/hw/joint_command/q/" + idx;
+        case 18: return "joint_command/q/" + idx;
+        case 19: return "joint_targets*/q/" + idx;
         default: return "";
       }
     };
 
-    if (cached_pattern >= 0 && cached_pattern < 12)
+    constexpr int kNumPatterns = 20;
+
+    if (cached_pattern >= 0 && cached_pattern < kNumPatterns)
     {
       bool all_ok = true;
       for (int i = 0; i < 12; ++i)
@@ -461,7 +474,7 @@ public:
 
     if (!has_q)
     {
-      for (int p = 0; p < 12; ++p)
+      for (int p = 0; p < kNumPatterns; ++p)
       {
         if (getVal(makeCandidate(p, 0), q_vals[0]))
         {
@@ -474,6 +487,52 @@ public:
           {
             has_q = true;
             cached_pattern = p;
+            break;
+          }
+        }
+      }
+    }
+
+    // Dynamic scan fallback if no static pattern matched
+    if (!has_q && plot_data_)
+    {
+      for (const auto& kv : plot_data_->numeric)
+      {
+        const std::string& key = kv.first;
+        std::string prefix;
+        bool is_joint_fmt = false;
+
+        if (key.size() >= 4 && key.rfind("/q/0") == key.size() - 4)
+        {
+          prefix = key.substr(0, key.size() - 4);
+        }
+        else if (key.size() >= 12 && key.rfind("/joint/00/q") == key.size() - 12)
+        {
+          prefix = key.substr(0, key.size() - 12);
+          is_joint_fmt = true;
+        }
+
+        if (!prefix.empty())
+        {
+          bool ok = true;
+          for (int i = 0; i < 12; ++i)
+          {
+            std::string c = is_joint_fmt
+                ? (prefix + "/joint/" + formatIndex(i) + "/q")
+                : (prefix + "/q/" + std::to_string(i));
+            if (!getVal(c, q_vals[i]))
+            {
+              if (!is_joint_fmt && getVal(prefix + "/q/" + formatIndex(i), q_vals[i]))
+              {
+                continue;
+              }
+              ok = false;
+              break;
+            }
+          }
+          if (ok)
+          {
+            has_q = true;
             break;
           }
         }
@@ -1006,8 +1065,6 @@ public:
   }
 
   QPushButton* closeButton() const { return close_btn_; }
-  QPushButton* popoutButton() const { return popout_btn_; }
-  bool isPoppedOut() const { return is_popped_out_; }
   void setPopoutCallback(std::function<void()> cb) { popout_cb_ = std::move(cb); }
 
   void setPoppedOutState(bool popped_out)
@@ -1221,14 +1278,6 @@ void M2RobotViewToolbox::init(PJ::PlotDataMapRef& src_data, PJ::TransformsMap& /
     qApp->installEventFilter(filter_);
   }
 
-  auto* timer = new QTimer(widget_);
-  connect(timer, &QTimer::timeout, widget_, [this]() {
-    if (widget_ && widget_->isVisible())
-    {
-      widget_->updatePoseFromPlotData();
-    }
-  });
-  timer->start(30);
 }
 
 std::pair<QWidget*, PJ::ToolboxPlugin::WidgetType> M2RobotViewToolbox::providedWidget() const

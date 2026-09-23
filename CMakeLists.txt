@@ -48,7 +48,6 @@ target_link_libraries(svan_m2_idl_lib PUBLIC CycloneDDS-CXX::ddscxx)
 # Core Flattening & Telemetry Enhancement Library
 # -----------------------------------------------------------------------------
 add_library(m2_message_flatten STATIC
-  src/m2_canonical_names.cpp
   src/m2_data_enhancement.cpp)
 
 target_include_directories(m2_message_flatten PUBLIC

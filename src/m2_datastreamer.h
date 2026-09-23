@@ -2,6 +2,7 @@
 
 #include "plotjuggler_m2/m2_data_enhancement.h"
 
+#include <dds/dds.hpp>
 #include <PlotJuggler/datastreamer_base.h>
 
 #include <atomic>
@@ -66,13 +67,15 @@ private:
   void appendSampleUnlocked(const std::string& series_name, double stamp, double value);
   void clearState();
   template <typename T, typename Method>
-  void addSubscriber(const std::string& topic_name, Method method, const SampleSink& sink);
+  void addSubscriber(dds::domain::DomainParticipant& participant,
+                     const std::string& topic_name, Method method, const SampleSink& sink);
 
   std::atomic_bool running_{false};
   std::chrono::steady_clock::time_point start_time_;
   std::mutex callback_mutex_;
   M2StreamConfig config_;
   M2EnhancementEngine enhancer_;
+  dds::domain::DomainParticipant participant_{dds::core::null};
   std::vector<std::unique_ptr<ISubListener>> subscribers_;
   QAction* settings_action_ = nullptr;
   std::vector<QAction*> actions_;
